@@ -1,2 +1,3 @@
 node_modules/
 *.vsix
+mod/.claude-plugin/types/

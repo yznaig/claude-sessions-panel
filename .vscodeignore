@@ -2,3 +2,5 @@
 node_modules/**
 *.vsix
 .gitignore
+.claude-plugin/**
+mod/**

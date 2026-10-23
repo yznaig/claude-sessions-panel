@@ -2,7 +2,7 @@
   "name": "claude-sessions-panel",
   "displayName": "Claude Sessions",
   "description": "A bottom-panel tab listing your live Claude Code sessions: running, response ready (green), needs an answer (blue). Click to focus the session.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "yznaig",
   "license": "MIT",
   "author": "yznaig",
@@ -77,6 +77,16 @@
         "command": "claudeSessions.pickWaitingSound",
         "title": "Pick Waiting Sound",
         "category": "Claude Sessions"
+      },
+      {
+        "command": "claudeSessions.goBack",
+        "title": "Go Back to Previous Session",
+        "category": "Claude Sessions"
+      },
+      {
+        "command": "claudeSessions.goForward",
+        "title": "Go Forward to Next Session",
+        "category": "Claude Sessions"
       }
     ],
     "menus": {
@@ -132,7 +142,17 @@
           "description": "Command run with the session id when a row is clicked. The Claude Code extension's internal open command by default."
         }
       }
-    }
+    },
+    "keybindings": [
+      {
+        "command": "claudeSessions.goBack",
+        "key": "alt+q"
+      },
+      {
+        "command": "claudeSessions.goForward",
+        "key": "alt+shift+q"
+      }
+    ]
   },
   "scripts": {
     "package": "vsce package --allow-missing-repository"

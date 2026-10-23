@@ -1,0 +1,6 @@
+{
+  "name": "claude-sessions-panel",
+  "description": "Companion mod for the Claude Sessions panel: records which session VS Code shows, for the Alt+Q session history.",
+  "owner": { "name": "yznaig" },
+  "plugins": [{ "name": "session-trail", "source": "./mod" }]
+}

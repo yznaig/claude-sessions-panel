@@ -9,6 +9,7 @@ A VS Code panel tab (next to Terminal) that lists your live Claude Code sessions
 - **Sound** on each green and blue transition. Default green is VS Code's success sound, default blue is VS Code's "chat needs your action" sound. **Claude Sessions: Pick Ready Sound** / **Pick Waiting Sound** preview the bundled set as you arrow through it; any `.wav` path works too, so you can drop in your own editor's chime.
 - **Click a row** to focus that session (it reveals its tab, or activates it in the Claude sidebar).
 - **✕** removes a session you're done with. **Removed (n)** shows them; **↩** brings one back. Any new activity in a removed session brings it back on its own.
+- **Alt+Q** jumps back to the session you looked at before this one. Keep pressing to walk further back; **Alt+Shift+Q** walks forward again. Switching to a session yourself starts a fresh walk from there. It needs the companion mod below.
 - **This window / All windows** filters to sessions whose folder is inside this window's workspace. Two windows, two lists.
 - Idle sessions with no status change for 12 hours drop off the list (setting `claudeSessions.idleHideHours`). Sessions that need you never drop.
 
@@ -26,6 +27,17 @@ code --install-extension claude-sessions-panel-0.1.0.vsix
 ```
 
 Under WSL run that from a VS Code terminal so it installs into the WSL side (the extension runs where Claude Code runs). Then reload the window and open the panel (`Ctrl+J`), tab **Claude Sessions**.
+
+## Companion mod: session-trail
+
+The session history behind Alt+Q needs to know which session VS Code is showing, which only Claude Code itself sees. The `session-trail` mod in [`mod/`](mod) records it: each time VS Code shows or hides a session it writes `~/.claude/session-trail/<session id>.json`. Install it from a clone of this repo:
+
+```bash
+claude plugin marketplace add /path/to/claude-sessions-panel
+claude plugin install session-trail@claude-sessions-panel
+```
+
+Sessions pick it up when they start, or after `/reload-plugins`.
 
 ## Settings
 

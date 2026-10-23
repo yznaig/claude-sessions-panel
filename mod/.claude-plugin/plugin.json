@@ -1,0 +1,6 @@
+{
+  "name": "session-trail",
+  "version": "0.1.0",
+  "description": "Records when VS Code shows or hides each Claude Code session, so the Claude Sessions panel can jump back through the sessions you looked at.",
+  "author": { "name": "yznaig" }
+}

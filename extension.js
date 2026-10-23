@@ -301,12 +301,85 @@ function html(webview, context) {
 <script nonce="${nonce}" src="${script}"></script></body></html>`;
 }
 
+// ---- session history (Alt+Q / Alt+Shift+Q) ------------------------------------
+//
+// The session-trail mod writes ~/.claude/session-trail/<id>.json each time VS Code
+// shows or hides a session. Going back walks a snapshot of this window's live
+// sessions, most recently shown first. The walk continues while you are still on
+// the session it last took you to; look at any other session and the next press
+// starts a fresh walk from there, so one press always means "the one before this".
+
+function trailDir() { return path.join(os.homedir(), '.claude', 'session-trail'); }
+
+function readTrail() {
+  const out = new Map();
+  let files = [];
+  try { files = fs.readdirSync(trailDir()).filter(f => f.endsWith('.json')); } catch { return out; }
+  for (const f of files) {
+    try {
+      const t = JSON.parse(fs.readFileSync(path.join(trailDir(), f), 'utf8'));
+      if (t && t.sessionId && t.shownAt) out.set(t.sessionId, t);
+    } catch { /* half-written: skip this pass */ }
+  }
+  return out;
+}
+
+class History {
+  constructor(tracker) { this.tracker = tracker; this.walk = null; }
+
+  // This window's live sessions that VS Code has shown, most recently shown first.
+  ordered() {
+    this.tracker.refresh();
+    const live = new Map(this.tracker.sessions.map(s => [s.sessionId, s]));
+    const trail = readTrail();
+    const rows = [];
+    for (const [id, t] of trail) {
+      const s = live.get(id);
+      if (!s || !this.tracker.inThisWindow(s.cwd || t.cwd)) continue;
+      rows.push({ id, name: s.name || id.slice(0, 8), shown: !!t.shown, shownAt: t.shownAt });
+    }
+    rows.sort((a, b) => b.shownAt - a.shownAt);
+    return rows;
+  }
+
+  current(rows) {
+    const shown = rows.filter(r => r.shown);
+    return shown.length ? shown[0].id : null;
+  }
+
+  async step(dir) {
+    const rows = this.ordered();
+    const cur = this.current(rows);
+    const walking = this.walk && cur !== null && this.walk.list[this.walk.at]?.id === cur;
+    if (!walking) {
+      if (dir > 0) { vscode.window.setStatusBarMessage('Claude Sessions: no later session in this walk', 2500); return; }
+      const list = cur ? [rows.find(r => r.id === cur), ...rows.filter(r => r.id !== cur)] : rows;
+      this.walk = { list, at: cur ? 0 : -1 };
+    }
+    const next = this.walk.at + (dir < 0 ? 1 : -1);
+    if (next < 0 || next >= this.walk.list.length) {
+      vscode.window.setStatusBarMessage(`Claude Sessions: no ${dir < 0 ? 'earlier' : 'later'} session`, 2500);
+      return;
+    }
+    this.walk.at = next;
+    const target = this.walk.list[next];
+    const cmd = cfg().get('focusCommand') || 'claude-vscode.editor.open';
+    try {
+      await vscode.commands.executeCommand(cmd, target.id);
+      vscode.window.setStatusBarMessage(`Claude: ${target.name}  (${next + 1}/${this.walk.list.length})`, 2500);
+    } catch (e) {
+      vscode.window.showWarningMessage(`Claude Sessions: could not open that session (${e.message}).`);
+    }
+  }
+}
+
 // ---- activation -------------------------------------------------------------
 
 function activate(context) {
   extensionRoot = context.extensionPath || __dirname;
   const tracker = new Tracker(context);
   const provider = new Provider(context, tracker);
+  const history = new History(tracker);
   context.subscriptions.push(vscode.window.registerWebviewViewProvider('claudeSessions.view', provider, { webviewOptions: { retainContextWhenHidden: true } }));
 
   let timer = null;
@@ -335,6 +408,8 @@ function activate(context) {
     }),
     vscode.commands.registerCommand('claudeSessions.pickReadySound', () => pickSound('ready')),
     vscode.commands.registerCommand('claudeSessions.pickWaitingSound', () => pickSound('waiting')),
+    vscode.commands.registerCommand('claudeSessions.goBack', () => history.step(-1)),
+    vscode.commands.registerCommand('claudeSessions.goForward', () => history.step(1)),
   );
 }
 
