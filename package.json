@@ -1,0 +1,147 @@
+{
+  "name": "claude-sessions-panel",
+  "displayName": "Claude Sessions",
+  "description": "A bottom-panel tab listing your live Claude Code sessions: running, response ready (green), needs an answer (blue). Click to focus the session.",
+  "version": "0.2.0",
+  "publisher": "yznaig",
+  "license": "MIT",
+  "author": "yznaig",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "claude code",
+    "sessions",
+    "notifications"
+  ],
+  "main": "./extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "claudeSessionsPanel",
+          "title": "Claude Sessions",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "claudeSessionsPanel": [
+        {
+          "type": "webview",
+          "id": "claudeSessions.view",
+          "name": "Sessions"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "claudeSessions.refresh",
+        "title": "Refresh",
+        "category": "Claude Sessions",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "claudeSessions.toggleAllWindows",
+        "title": "Toggle This Window / All Windows",
+        "category": "Claude Sessions",
+        "icon": "$(multiple-windows)"
+      },
+      {
+        "command": "claudeSessions.toggleSound",
+        "title": "Toggle Sounds",
+        "category": "Claude Sessions",
+        "icon": "$(unmute)"
+      },
+      {
+        "command": "claudeSessions.testSounds",
+        "title": "Play Test Sounds",
+        "category": "Claude Sessions"
+      },
+      {
+        "command": "claudeSessions.pickReadySound",
+        "title": "Pick Ready Sound",
+        "category": "Claude Sessions"
+      },
+      {
+        "command": "claudeSessions.pickWaitingSound",
+        "title": "Pick Waiting Sound",
+        "category": "Claude Sessions"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "claudeSessions.toggleAllWindows",
+          "when": "view == claudeSessions.view",
+          "group": "navigation@1"
+        },
+        {
+          "command": "claudeSessions.toggleSound",
+          "when": "view == claudeSessions.view",
+          "group": "navigation@2"
+        },
+        {
+          "command": "claudeSessions.refresh",
+          "when": "view == claudeSessions.view",
+          "group": "navigation@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Claude Sessions",
+      "properties": {
+        "claudeSessions.sessionsDir": {
+          "type": "string",
+          "default": "",
+          "description": "Folder Claude Code writes its session registry to. Empty means ~/.claude/sessions."
+        },
+        "claudeSessions.idleHideHours": {
+          "type": "number",
+          "default": 12,
+          "description": "Hide idle sessions that have had no status change for this many hours. Sessions that need you are always shown."
+        },
+        "claudeSessions.sound.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Play a sound when a session has a response ready or needs an answer."
+        },
+        "claudeSessions.sound.ready": {
+          "type": "string",
+          "default": "success",
+          "description": "Sound for 'response ready': a bundled name (success, chatUserActionRequired, taskCompleted, requestSent, responseReceived1, quickFixes, warning, terminalBell) or a path to a .wav. Use 'Claude Sessions: Pick Ready Sound' to preview."
+        },
+        "claudeSessions.sound.waiting": {
+          "type": "string",
+          "default": "chatUserActionRequired",
+          "description": "Sound for 'needs an answer': a bundled name or a path to a .wav. Use 'Claude Sessions: Pick Waiting Sound' to preview."
+        },
+        "claudeSessions.focusCommand": {
+          "type": "string",
+          "default": "claude-vscode.editor.open",
+          "description": "Command run with the session id when a row is clicked. The Claude Code extension's internal open command by default."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "package": "vsce package --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^4.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yznaig/claude-sessions-panel.git"
+  }
+}

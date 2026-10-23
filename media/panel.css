@@ -1,0 +1,28 @@
+body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); padding: 4px 8px; margin: 0; }
+#bar { display: flex; gap: 10px; align-items: center; padding: 2px 0 6px; color: var(--vscode-descriptionForeground); font-size: 0.9em; flex-wrap: wrap; }
+#bar button, .row button { background: none; border: 1px solid var(--vscode-button-secondaryBackground); color: var(--vscode-foreground); border-radius: 3px; padding: 1px 7px; cursor: pointer; font: inherit; font-size: 0.9em; }
+#bar button:hover, .row button:hover { background: var(--vscode-toolbar-hoverBackground); }
+#bar button.on { background: var(--vscode-button-secondaryBackground); }
+.empty { color: var(--vscode-descriptionForeground); padding: 8px 2px; }
+.row { display: grid; grid-template-columns: 14px minmax(120px, 2fr) auto auto auto 26px; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 4px; cursor: pointer; }
+.row:hover { background: var(--vscode-list-hoverBackground); }
+.row.ready { background: color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 12%, transparent); }
+.row.waiting { background: color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 14%, transparent); }
+.row.dismissedRow { opacity: 0.6; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--vscode-descriptionForeground); opacity: 0.5; justify-self: center; }
+.dot.busy { opacity: 1; background: transparent; border: 2px solid var(--vscode-progressBar-background, #0e70c0); border-top-color: transparent; width: 8px; height: 8px; animation: spin 0.9s linear infinite; }
+.dot.ready { opacity: 1; background: var(--vscode-testing-iconPassed, #73c991); box-shadow: 0 0 6px var(--vscode-testing-iconPassed, #73c991); }
+.dot.waiting { opacity: 1; background: var(--vscode-charts-blue, #3794ff); box-shadow: 0 0 6px var(--vscode-charts-blue, #3794ff); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.35); } }
+.name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.repo { font-size: 0.85em; color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-panel-border, #444); border-radius: 8px; padding: 0 6px; white-space: nowrap; }
+.state { font-size: 0.9em; white-space: nowrap; }
+.state.ready { color: var(--vscode-testing-iconPassed, #73c991); font-weight: 600; }
+.state.waiting { color: var(--vscode-charts-blue, #3794ff); font-weight: 600; }
+.state.busy { color: var(--vscode-progressBar-background, #0e70c0); }
+.state.idle { color: var(--vscode-descriptionForeground); }
+.age { font-size: 0.85em; color: var(--vscode-descriptionForeground); white-space: nowrap; min-width: 48px; text-align: right; }
+.row .x { border: none; opacity: 0; padding: 0 4px; font-size: 1em; }
+.row:hover .x { opacity: 0.8; }
+h4 { margin: 10px 0 4px; font-weight: 600; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
