@@ -52,6 +52,69 @@ function readRegistry() {
   return [...byId.values()];
 }
 
+// ---- titles -----------------------------------------------------------------
+//
+// The registry keeps a placeholder name ("command-hq-89") for a session Claude
+// names on its own; the real title is written into the session's transcript.
+// Same rule as the Claude extension's session list: the latest title you set
+// (custom-title) wins, else the latest generated one (ai-title). Each transcript
+// is read once, then only the bytes added since.
+
+const titleCache = new Map(); // sessionId -> { file, offset, custom, ai, tail }
+
+function transcriptFor(rec) {
+  const projects = path.join(os.homedir(), '.claude', 'projects');
+  const direct = path.join(projects, String(rec.cwd || '').replace(/[^a-zA-Z0-9]/g, '-'), rec.sessionId + '.jsonl');
+  if (fs.existsSync(direct)) return direct;
+  try {
+    for (const d of fs.readdirSync(projects)) {
+      const p = path.join(projects, d, rec.sessionId + '.jsonl');
+      if (fs.existsSync(p)) return p;
+    }
+  } catch { /* no projects dir */ }
+  return null;
+}
+
+function scanTitles(entry, text) {
+  for (const line of text.split('\n')) {
+    if (line.indexOf('-title"') < 0) continue;
+    let r;
+    try { r = JSON.parse(line); } catch { continue; }
+    if (r.type === 'custom-title' && r.customTitle) entry.custom = r.customTitle;
+    else if (r.type === 'ai-title' && r.aiTitle) entry.ai = r.aiTitle;
+  }
+}
+
+function titleFor(rec) {
+  let entry = titleCache.get(rec.sessionId);
+  if (!entry || !entry.file) {
+    entry = { file: transcriptFor(rec), offset: 0, custom: null, ai: null, tail: '' };
+    titleCache.set(rec.sessionId, entry);
+  }
+  if (!entry.file) return null;
+  let size;
+  try { size = fs.statSync(entry.file).size; } catch { entry.file = null; return null; }
+  if (size < entry.offset) { entry.offset = 0; entry.tail = ''; entry.custom = null; entry.ai = null; } // rewritten
+  if (size > entry.offset) {
+    let fd;
+    try {
+      fd = fs.openSync(entry.file, 'r');
+      const buf = Buffer.alloc(size - entry.offset);
+      fs.readSync(fd, buf, 0, buf.length, entry.offset);
+      const text = entry.tail + buf.toString('utf8');
+      const cut = text.lastIndexOf('\n');
+      scanTitles(entry, cut < 0 ? '' : text.slice(0, cut));
+      entry.tail = cut < 0 ? text : text.slice(cut + 1); // a line still being written
+      entry.offset = size;
+    } catch { /* try again next pass */ } finally { if (fd !== undefined) fs.closeSync(fd); }
+  }
+  return entry.custom || entry.ai || null;
+}
+
+function displayName(rec) {
+  return titleFor(rec) || rec.name || String(rec.sessionId).slice(0, 8);
+}
+
 // ---- sound ------------------------------------------------------------------
 
 let extensionRoot = __dirname;
@@ -218,7 +281,7 @@ class Tracker {
       const since = r.statusUpdatedAt || r.updatedAt || r.startedAt || now;
       if (!dismissed && !attention && status === 'idle' && now - since > hideAfter) continue;
       rows.push({
-        id, pid: r.pid, name: r.name || id.slice(0, 8), cwd: r.cwd || '',
+        id, pid: r.pid, name: displayName(r), cwd: r.cwd || '',
         repo: path.basename(r.cwd || '') || '?', status, attention, dismissed,
         waitingFor: r.waitingFor || '', since, startedAt: r.startedAt || since,
       });
@@ -336,7 +399,7 @@ class History {
     for (const [id, t] of trail) {
       const s = live.get(id);
       if (!s || !this.tracker.inThisWindow(s.cwd || t.cwd)) continue;
-      rows.push({ id, name: s.name || id.slice(0, 8), shown: !!t.shown, shownAt: t.shownAt });
+      rows.push({ id, name: displayName(s), shown: !!t.shown, shownAt: t.shownAt });
     }
     rows.sort((a, b) => b.shownAt - a.shownAt);
     return rows;
