@@ -14,6 +14,7 @@
     return Math.round(h / 24) + 'd';
   }
   function label(r) {
+    if (r.closed) return '✓ closed';
     if (r.attention === 'waiting') return r.waitingFor ? 'needs you: ' + r.waitingFor : 'needs you';
     if (r.attention === 'ready') return 'response ready';
     if (r.status === 'busy') return 'running';
@@ -23,8 +24,8 @@
   function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
 
   function row(r) {
-    const kind = r.attention || r.status;
-    const d = el('div', 'row ' + (r.attention || '') + (r.dismissed ? ' dismissedRow' : ''));
+    const kind = r.closed ? 'closed' : (r.attention || r.status);
+    const d = el('div', 'row ' + (r.attention || '') + (r.closed ? ' closedRow' : '') + (r.dismissed ? ' dismissedRow' : ''));
     d.title = r.cwd + '\n' + r.id;
     d.appendChild(el('span', 'dot ' + kind));
     d.appendChild(el('span', 'name', r.name));

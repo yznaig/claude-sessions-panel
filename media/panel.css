@@ -26,3 +26,7 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
 .row .x { border: none; opacity: 0; padding: 0 4px; font-size: 1em; }
 .row:hover .x { opacity: 0.8; }
 h4 { margin: 10px 0 4px; font-weight: 600; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
+
+.row.closedRow { opacity: 0.7; }
+.dot.closed { opacity: 1; background: transparent; border: 1.5px solid var(--vscode-testing-iconPassed, #73c991); width: 8px; height: 8px; }
+.state.closed { color: var(--vscode-testing-iconPassed, #73c991); }

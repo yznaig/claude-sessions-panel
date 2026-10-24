@@ -11,6 +11,7 @@ A VS Code panel tab (next to Terminal) that lists your live Claude Code sessions
 - **✕** removes a session you're done with. **Removed (n)** shows them; **↩** brings one back. Any new activity in a removed session brings it back on its own.
 - **Alt+Q** jumps back to the session you looked at before this one. Keep pressing to walk further back; **Alt+Shift+Q** walks forward again. Switching to a session yourself starts a fresh walk from there. It needs the companion mod below.
 - **This window / All windows** filters to sessions whose folder is inside this window's workspace. Two windows, two lists.
+- **Closed sessions leave on their own.** When a session's last turn ran the `anything-left` skill and its answer opens with "Good to close", the row turns into a dim **✓ closed** with no sound or badge. Once you switch away from it, it moves to Removed. Keep working in it and it comes back. Without the companion mod the panel can't tell when you left, so it moves the session two minutes after the answer instead. The skill's name and the phrase are constants at the top of the transcript section in `extension.js`.
 - Idle sessions with no status change for 12 hours drop off the list (setting `claudeSessions.idleHideHours`). Sessions that need you never drop.
 
 ## How it works

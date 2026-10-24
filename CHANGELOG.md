@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.4.0 — 2026-10-23
+Sessions whose last turn was an anything-left run that answered "Good to close" show as closed and move to Removed once you switch away from them.
+
 ## 0.3.1 — 2026-10-23
 Session names follow the titles Claude gives a session and the names you set, read from its transcript the way the Claude extension's own list does, instead of the registry's placeholder.
 

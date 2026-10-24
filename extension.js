@@ -10,6 +10,9 @@ const os = require('os');
 const { spawn } = require('child_process');
 
 const DISMISSED_KEY = 'claudeSessions.dismissed';
+const AUTO_CLOSED_KEY = 'claudeSessions.autoClosed';
+// Without the session-trail mod nothing says when you left a closed session: move it after this.
+const NO_TRAIL_CLOSE_MS = 2 * 60e3;
 const SHOW_ALL_KEY = 'claudeSessions.showAllWindows';
 
 function cfg() { return vscode.workspace.getConfiguration('claudeSessions'); }
@@ -52,15 +55,22 @@ function readRegistry() {
   return [...byId.values()];
 }
 
-// ---- titles -----------------------------------------------------------------
+// ---- transcripts: titles and "good to close" -------------------------------
 //
-// The registry keeps a placeholder name ("command-hq-89") for a session Claude
-// names on its own; the real title is written into the session's transcript.
-// Same rule as the Claude extension's session list: the latest title you set
-// (custom-title) wins, else the latest generated one (ai-title). Each transcript
-// is read once, then only the bytes added since.
+// Titles. The registry keeps a placeholder name ("command-hq-89") for a session
+// Claude names on its own; the real title is written into the session's
+// transcript. Same rule as the Claude extension's session list: the latest title
+// you set (custom-title) wins, else the latest generated one (ai-title).
+//
+// Closed. When a session's latest turn ran the anything-left skill and its final
+// reply opens with "Good to close", the session is done: the panel shows it as
+// closed and moves it to Removed once you switch away from it.
+//
+// Each transcript is read once, then only the bytes added since.
 
-const titleCache = new Map(); // sessionId -> { file, offset, custom, ai, tail }
+const transcriptCache = new Map(); // sessionId -> entry
+const CLOSE_SKILL = 'anything-left';
+const CLOSE_REPLY = /^[\s*_>#]*good to close\b/i;
 
 function transcriptFor(rec) {
   const projects = path.join(os.homedir(), '.claude', 'projects');
@@ -75,26 +85,59 @@ function transcriptFor(rec) {
   return null;
 }
 
-function scanTitles(entry, text) {
-  for (const line of text.split('\n')) {
-    if (line.indexOf('-title"') < 0) continue;
-    let r;
-    try { r = JSON.parse(line); } catch { continue; }
-    if (r.type === 'custom-title' && r.customTitle) entry.custom = r.customTitle;
-    else if (r.type === 'ai-title' && r.aiTitle) entry.ai = r.aiTitle;
+function blocksOf(r) {
+  const c = r && r.message && r.message.content;
+  if (typeof c === 'string') return [{ type: 'text', text: c }];
+  return Array.isArray(c) ? c : [];
+}
+
+function scanLine(entry, line) {
+  const isUser = line.indexOf('"type":"user"') >= 0;
+  const isAssistant = line.indexOf('"type":"assistant"') >= 0;
+  if (line.indexOf('-title"') < 0 && !isUser && !isAssistant) return;
+  if (isUser && line.indexOf('"tool_result"') >= 0) return;           // tool output, not a prompt
+  if (isAssistant && !entry.checking && line.indexOf(CLOSE_SKILL) < 0) return;
+  let r;
+  try { r = JSON.parse(line); } catch { return; }
+  if (r.type === 'custom-title' && r.customTitle) { entry.custom = r.customTitle; return; }
+  if (r.type === 'ai-title' && r.aiTitle) { entry.ai = r.aiTitle; return; }
+  if (r.isSidechain) return;                                            // a subagent's own transcript rows
+  const blocks = blocksOf(r);
+  if (r.type === 'user') {
+    if (r.isMeta) return;
+    const texts = blocks.filter(b => b && b.type === 'text').map(b => String(b.text || '').trim()).filter(Boolean);
+    const text = texts.join(' ');
+    // A prompt can arrive as several blocks (an IDE note first, then the words): any block
+    // of the person's own, or a slash command, makes it theirs.
+    const typed = texts.some(t => !t.startsWith('<') || t.indexOf('<command-name>') >= 0);
+    if (!typed) return;                                                 // a reminder or notice, not the person
+    entry.checking = text.indexOf('<command-name>/' + CLOSE_SKILL) >= 0;
+    entry.closed = false;
+    entry.closedAt = 0;
+    return;
+  }
+  if (r.type === 'assistant') {
+    for (const b of blocks) {
+      if (b && b.type === 'tool_use' && b.name === 'Skill' && b.input && String(b.input.skill || '') === CLOSE_SKILL) entry.checking = true;
+    }
+    if (!entry.checking) return;
+    const text = blocks.filter(b => b && b.type === 'text').map(b => b.text || '').join('\n').trim();
+    if (!text) return;
+    entry.closed = CLOSE_REPLY.test(text);                              // the turn's last words decide
+    entry.closedAt = entry.closed ? (Date.parse(r.timestamp) || Date.now()) : 0;
   }
 }
 
-function titleFor(rec) {
-  let entry = titleCache.get(rec.sessionId);
+function readTranscript(rec) {
+  let entry = transcriptCache.get(rec.sessionId);
   if (!entry || !entry.file) {
-    entry = { file: transcriptFor(rec), offset: 0, custom: null, ai: null, tail: '' };
-    titleCache.set(rec.sessionId, entry);
+    entry = { file: transcriptFor(rec), offset: 0, tail: '', custom: null, ai: null, checking: false, closed: false, closedAt: 0 };
+    transcriptCache.set(rec.sessionId, entry);
   }
-  if (!entry.file) return null;
+  if (!entry.file) return entry;
   let size;
-  try { size = fs.statSync(entry.file).size; } catch { entry.file = null; return null; }
-  if (size < entry.offset) { entry.offset = 0; entry.tail = ''; entry.custom = null; entry.ai = null; } // rewritten
+  try { size = fs.statSync(entry.file).size; } catch { entry.file = null; return entry; }
+  if (size < entry.offset) Object.assign(entry, { offset: 0, tail: '', custom: null, ai: null, checking: false, closed: false, closedAt: 0 }); // rewritten
   if (size > entry.offset) {
     let fd;
     try {
@@ -103,16 +146,17 @@ function titleFor(rec) {
       fs.readSync(fd, buf, 0, buf.length, entry.offset);
       const text = entry.tail + buf.toString('utf8');
       const cut = text.lastIndexOf('\n');
-      scanTitles(entry, cut < 0 ? '' : text.slice(0, cut));
+      if (cut >= 0) for (const line of text.slice(0, cut).split('\n')) scanLine(entry, line);
       entry.tail = cut < 0 ? text : text.slice(cut + 1); // a line still being written
       entry.offset = size;
     } catch { /* try again next pass */ } finally { if (fd !== undefined) fs.closeSync(fd); }
   }
-  return entry.custom || entry.ai || null;
+  return entry;
 }
 
 function displayName(rec) {
-  return titleFor(rec) || rec.name || String(rec.sessionId).slice(0, 8);
+  const t = readTranscript(rec);
+  return t.custom || t.ai || rec.name || String(rec.sessionId).slice(0, 8);
 }
 
 // ---- sound ------------------------------------------------------------------
@@ -220,6 +264,7 @@ class Tracker {
     this.prevStatus = new Map();   // sessionId -> last seen status
     this.attention = new Map();    // sessionId -> 'ready' | 'waiting'
     this.dismissed = new Set(context.globalState.get(DISMISSED_KEY, []));
+    this.autoClosed = new Set(context.globalState.get(AUTO_CLOSED_KEY, [])); // "<id>:<closedAt>" already moved once
     this.firstLoad = true;
     this.sessions = [];
   }
@@ -228,12 +273,27 @@ class Tracker {
 
   refresh() {
     const regs = readRegistry();
+    const trail = readTrail();
+    const now = Date.now();
     const seen = new Set();
     for (const r of regs) {
       const id = r.sessionId;
       seen.add(id);
       const status = r.status || 'idle';
       const prev = this.prevStatus.get(id);
+      const t = readTranscript(r);
+      if (status === 'idle' && t.closed) {
+        // anything-left said "Good to close": done, not waiting on you.
+        this.attention.delete(id);
+        this.prevStatus.set(id, status);
+        const key = `${id}:${t.closedAt}`;
+        if (!this.autoClosed.has(key)) {
+          const seenShown = trail.get(id);
+          const leftIt = seenShown ? (!seenShown.shown && seenShown.hiddenAt >= t.closedAt) : now - t.closedAt > NO_TRAIL_CLOSE_MS;
+          if (leftIt) { this.dismiss(id); this.markAutoClosed(key); }
+        }
+        continue;
+      }
       if (status === 'busy') {
         this.attention.delete(id);
         if (prev !== undefined && prev !== 'busy') this.undismiss(id);
@@ -255,6 +315,13 @@ class Tracker {
     }
     this.firstLoad = false;
     this.sessions = regs;
+  }
+
+  markAutoClosed(key) {
+    this.autoClosed.add(key);
+    const keep = [...this.autoClosed].slice(-300);
+    this.autoClosed = new Set(keep);
+    void this.context.globalState.update(AUTO_CLOSED_KEY, keep);
   }
 
   undismiss(id) { if (this.dismissed.delete(id)) void this.saveDismissed(); }
@@ -284,9 +351,10 @@ class Tracker {
         id, pid: r.pid, name: displayName(r), cwd: r.cwd || '',
         repo: path.basename(r.cwd || '') || '?', status, attention, dismissed,
         waitingFor: r.waitingFor || '', since, startedAt: r.startedAt || since,
+        closed: status === 'idle' && readTranscript(r).closed,
       });
     }
-    const rank = x => x.attention === 'waiting' ? 0 : x.attention === 'ready' ? 1 : x.status === 'busy' ? 2 : 3;
+    const rank = x => x.attention === 'waiting' ? 0 : x.attention === 'ready' ? 1 : x.status === 'busy' ? 2 : x.closed ? 4 : 3;
     rows.sort((a, b) => rank(a) - rank(b) || b.since - a.since);
     return rows;
   }
