@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.5.1 — 2026-10-23
+A finished session now also leaves when you switch away with a click in this panel: another session shown since counts as leaving it. The panel watches the trail folder, so it leaves at once.
+
 ## 0.5.0 — 2026-10-23
 Alt+A: ask an aside about the text you highlighted in a Claude reply, handed to the side-fork mod in the session on screen.
 

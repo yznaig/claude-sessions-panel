@@ -275,6 +275,17 @@ class Tracker {
     const regs = readRegistry();
     const trail = readTrail();
     const now = Date.now();
+    // The most recent time each window's folder showed some session: a switch made by
+    // the panel's own click does not always record the old session as hidden, but it
+    // always records the new one as shown.
+    const lastShownIn = cwd => {
+      let latest = 0;
+      for (const s of regs) {
+        const tr = trail.get(s.sessionId);
+        if (tr && sameWindow(s.cwd, cwd) && tr.shownAt > latest) latest = tr.shownAt;
+      }
+      return latest;
+    };
     const seen = new Set();
     for (const r of regs) {
       const id = r.sessionId;
@@ -289,7 +300,12 @@ class Tracker {
         const key = `${id}:${t.closedAt}`;
         if (!this.autoClosed.has(key)) {
           const seenShown = trail.get(id);
-          const leftIt = seenShown ? (!seenShown.shown && seenShown.hiddenAt >= t.closedAt) : now - t.closedAt > NO_TRAIL_CLOSE_MS;
+          // Left it: VS Code hid it after the close, or another session in its window
+          // has been shown since both the close and its own last showing.
+          const leftIt = seenShown
+            ? (!seenShown.shown && seenShown.hiddenAt >= t.closedAt) ||
+              lastShownIn(r.cwd) > Math.max(t.closedAt, seenShown.shownAt)
+            : now - t.closedAt > NO_TRAIL_CLOSE_MS;
           if (leftIt) { this.dismiss(id); this.markAutoClosed(key); }
         }
         continue;
@@ -442,6 +458,15 @@ function html(webview, context) {
 
 function trailDir() { return path.join(os.homedir(), '.claude', 'session-trail'); }
 
+// Whether two session folders belong to the same VS Code window: both inside this
+// window's workspace, or, for another window's sessions, the same folder.
+function sameWindow(a, b) {
+  const folders = (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath.replace(/\/$/, ''));
+  const inHere = c => !!c && folders.some(f => c === f || c.startsWith(f + '/'));
+  if (inHere(a) || inHere(b)) return inHere(a) && inHere(b);
+  return !!a && a === b;
+}
+
 function readTrail() {
   const out = new Map();
   let files = [];
@@ -568,8 +593,10 @@ function activate(context) {
   tick();
   let watcher = null;
   try { watcher = fs.watch(sessionsDir(), { persistent: false }, schedule); } catch { /* dir may not exist yet */ }
+  let trailWatcher = null; // a session shown or hidden: closed sessions leave at once
+  try { fs.mkdirSync(trailDir(), { recursive: true }); trailWatcher = fs.watch(trailDir(), { persistent: false }, schedule); } catch { /* no watch: the poll covers it */ }
   const poll = setInterval(tick, 5000); // fallback: pid deaths and missed events
-  context.subscriptions.push({ dispose: () => { if (watcher) watcher.close(); clearInterval(poll); if (timer) clearTimeout(timer); } });
+  context.subscriptions.push({ dispose: () => { if (watcher) watcher.close(); if (trailWatcher) trailWatcher.close(); clearInterval(poll); if (timer) clearTimeout(timer); } });
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('claudeSessions')) tick(); }));
 
   context.subscriptions.push(
