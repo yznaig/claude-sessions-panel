@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.5.0 — 2026-10-23
+Alt+A: ask an aside about the text you highlighted in a Claude reply, handed to the side-fork mod in the session on screen.
+
 ## 0.4.0 — 2026-10-23
 Sessions whose last turn was an anything-left run that answered "Good to close" show as closed and move to Removed once you switch away from them.
 

@@ -504,6 +504,54 @@ class History {
   }
 }
 
+// ---- aside on a highlight (Alt+A) ----------------------------------------------
+//
+// Select text in a Claude reply and press Alt+A. VS Code's copy command copies a
+// focused webview's selection, so the panel copies it (putting your clipboard back
+// afterwards) and drops it in the inbox of the session this window shows. The
+// side-fork mod in that session picks it up and opens an aside on it.
+
+function sideForkInbox(sessionId) {
+  return path.join(os.homedir(), '.claude', 'side-fork', 'inbox', sessionId + '.json');
+}
+
+async function askAside(history) {
+  const rows = history.ordered();
+  const cur = history.current(rows);
+  if (!cur) {
+    vscode.window.showWarningMessage('Claude Sessions: no Claude session is on screen in this window yet. Show one (sessions need the session-trail and side-fork mods loaded), then try again.');
+    return;
+  }
+  const clip = vscode.env.clipboard;
+  const before = await clip.readText();
+  const sentinel = `⁣claude-sessions-${Date.now()}`;
+  let selected = '';
+  try {
+    await clip.writeText(sentinel);
+    await vscode.commands.executeCommand('editor.action.clipboardCopyAction');
+    await new Promise(r => setTimeout(r, 150));
+    selected = await clip.readText();
+  } finally {
+    await clip.writeText(before);
+  }
+  if (!selected || selected === sentinel || !selected.trim()) {
+    vscode.window.setStatusBarMessage('Claude Sessions: select some text in a Claude reply first', 3000);
+    return;
+  }
+  const file = sideForkInbox(cur);
+  const req = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text: selected.slice(0, 4000), at: Date.now() };
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file + '.tmp', JSON.stringify(req));
+    fs.renameSync(file + '.tmp', file);
+  } catch (e) {
+    vscode.window.showWarningMessage(`Claude Sessions: could not hand the highlight to the session (${e.message}).`);
+    return;
+  }
+  const shown = selected.replace(/\s+/g, ' ').trim();
+  vscode.window.setStatusBarMessage(`Aside: "${shown.length > 50 ? shown.slice(0, 49) + '…' : shown}"`, 3000);
+}
+
 // ---- activation -------------------------------------------------------------
 
 function activate(context) {
@@ -541,6 +589,7 @@ function activate(context) {
     vscode.commands.registerCommand('claudeSessions.pickWaitingSound', () => pickSound('waiting')),
     vscode.commands.registerCommand('claudeSessions.goBack', () => history.step(-1)),
     vscode.commands.registerCommand('claudeSessions.goForward', () => history.step(1)),
+    vscode.commands.registerCommand('claudeSessions.askAside', () => askAside(history)),
   );
 }
 
