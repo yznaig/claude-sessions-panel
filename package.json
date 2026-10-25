@@ -2,7 +2,7 @@
   "name": "claude-sessions-panel",
   "displayName": "Claude Sessions",
   "description": "A bottom-panel tab listing your live Claude Code sessions: running, response ready (green), needs an answer (blue). Click to focus the session.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "yznaig",
   "license": "MIT",
   "author": "yznaig",
@@ -121,10 +121,10 @@
           "default": "",
           "description": "Folder Claude Code writes its session registry to. Empty means ~/.claude/sessions."
         },
-        "claudeSessions.idleHideHours": {
+        "claudeSessions.removedClearHours": {
           "type": "number",
           "default": 12,
-          "description": "Hide idle sessions that have had no status change for this many hours. Sessions that need you are always shown."
+          "description": "Clear a session from the Removed list this many hours after you removed it. New activity in it still brings it back."
         },
         "claudeSessions.sound.enabled": {
           "type": "boolean",

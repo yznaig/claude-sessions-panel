@@ -19,6 +19,8 @@ const OPEN_KEY = 'claudeSessions.open';
 // A session of this window's folder that stops while VS Code keeps running was ended on purpose and
 // leaves the saved list after this long; when VS Code itself closes, the panel is gone well before.
 const ENDED_GRACE_MS = 30e3;
+// The one-time rebuild after upgrading to 0.6.0 takes stopped sessions active within this window.
+const UPGRADE_WINDOW_MS = 12 * 3600e3;
 
 function cfg() { return vscode.workspace.getConfiguration('claudeSessions'); }
 function sessionsDir() { return cfg().get('sessionsDir') || path.join(os.homedir(), '.claude', 'sessions'); }
@@ -274,11 +276,17 @@ class Tracker {
     this.sessions = [];
 
     // The Removed list does not outlive VS Code: keep only removals of sessions still running.
+    // Saved as [id, removedAt]; versions before 0.7.0 saved bare ids, counted as removed now.
     const live = readRegistry();
     const liveIds = new Set(live.map(r => r.sessionId));
     const removed = context.globalState.get(DISMISSED_KEY, []);
-    this.dismissed = new Set(removed.filter(id => liveIds.has(id)));
-    if (this.dismissed.size !== removed.length) void this.saveDismissed();
+    const started = Date.now();
+    this.dismissed = new Map();     // sessionId -> when it was removed
+    for (const x of removed) {
+      const [id, at] = Array.isArray(x) ? x : [x, started];
+      if (liveIds.has(id)) this.dismissed.set(id, at || started);
+    }
+    if (this.dismissed.size !== removed.length || removed.some(x => !Array.isArray(x))) void this.saveDismissed();
 
     // The listed sessions come back after a restart as "not running" rows; a click reopens one.
     this.known = new Map();       // sessionId -> { id, cwd, name, since, startedAt }, as last seen
@@ -287,7 +295,7 @@ class Tracker {
     this.liveThisRun = new Set(); // seen running since VS Code started
     this.goneAt = new Map();      // sessionId -> when a session of this window was first seen stopped
     let open = context.globalState.get(OPEN_KEY);
-    if (!Array.isArray(open)) open = this.listedBeforeUpgrade(new Set(removed));
+    if (!Array.isArray(open)) open = this.listedBeforeUpgrade(new Set(removed.map(x => (Array.isArray(x) ? x[0] : x))));
     for (const e of open) if (e && e.id) { this.known.set(e.id, e); this.kept.set(e.id, e); }
   }
 
@@ -298,7 +306,7 @@ class Tracker {
     const out = [];
     for (const r of readRegistry(true)) {
       const e = this.entryOf(r, now);
-      if (removed.has(e.id) || now - e.since > this.hideAfter() || readTranscript(r).closed) continue;
+      if (removed.has(e.id) || now - e.since > UPGRADE_WINDOW_MS || readTranscript(r).closed) continue;
       out.push(e);
     }
     return out;
@@ -309,7 +317,10 @@ class Tracker {
     return { id: r.sessionId, cwd: r.cwd || '', name: displayName(r), since, startedAt: r.startedAt || since };
   }
 
-  hideAfter() { return (cfg().get('idleHideHours') || 12) * 3600e3; }
+  // Removed sessions leave the Removed list this long after they were removed. They stay hidden;
+  // new activity still brings one back.
+  clearRemovedAfter() { return (cfg().get('removedClearHours') || 12) * 3600e3; }
+  removedExpired(id, now) { return now - (this.dismissed.get(id) || now) > this.clearRemovedAfter(); }
 
   saveDismissed() { return this.context.globalState.update(DISMISSED_KEY, [...this.dismissed]); }
 
@@ -328,10 +339,9 @@ class Tracker {
   endedHere(id, cwd) { return this.liveThisRun.has(id) && !this.liveIds.has(id) && this.ownedHere(cwd); }
 
   // Rebuild the saved list. Running sessions the panel lists are saved as they are now. A stopped
-  // session of this window's folder stays until removed, aged out, closed, or ended while VS Code
-  // ran. Another window's stopped sessions are that window's to drop: the saved copy is followed.
+  // session of this window's folder stays until removed, closed, or ended while VS Code ran.
+  // Another window's stopped sessions are that window's to drop: the saved copy is followed.
   keep(regs, now) {
-    const hideAfter = this.hideAfter();
     const stored = new Map((this.context.globalState.get(OPEN_KEY) || []).filter(e => e && e.id).map(e => [e.id, e]));
     const next = new Map();
     this.liveIds = new Set(regs.map(r => r.sessionId));
@@ -341,11 +351,10 @@ class Tracker {
       this.known.set(e.id, e);
       this.liveThisRun.add(e.id);
       this.goneAt.delete(e.id);
-      const listed = this.attention.has(e.id) || status !== 'idle' || now - e.since <= hideAfter;
-      if (listed && !this.dismissed.has(e.id) && !(status === 'idle' && readTranscript(r).closed)) next.set(e.id, e);
+      if (!this.dismissed.has(e.id) && !(status === 'idle' && readTranscript(r).closed)) next.set(e.id, e);
     }
     const carry = (id, e) => {
-      if (this.liveIds.has(id) || this.dismissed.has(id) || now - (e.since || 0) > hideAfter) return;
+      if (this.liveIds.has(id) || this.dismissed.has(id)) return;
       if (this.endedHere(id, e.cwd)) {
         if (!this.goneAt.has(id)) this.goneAt.set(id, now);
         if (now - this.goneAt.get(id) > ENDED_GRACE_MS) return;
@@ -438,7 +447,7 @@ class Tracker {
     if (e && !this.liveIds.has(id)) { this.kept.set(id, e); void this.saveKept(); }
   }
   dismiss(id) {
-    this.dismissed.add(id); this.attention.delete(id); void this.saveDismissed();
+    this.dismissed.set(id, Date.now()); this.attention.delete(id); void this.saveDismissed();
     if (this.kept.delete(id)) void this.saveKept();
   }
   restore(id) { this.undismiss(id); }
@@ -452,12 +461,12 @@ class Tracker {
 
   view(showAll) {
     const now = Date.now();
-    const hideAfter = this.hideAfter();
     const rows = [];
     for (const e of this.known.values()) {
       if (this.liveIds.has(e.id) || this.endedHere(e.id, e.cwd)) continue;
       const dismissed = this.dismissed.has(e.id);
       if (!dismissed && !this.kept.has(e.id)) continue;
+      if (dismissed && this.removedExpired(e.id, now)) continue;
       if (!showAll && !this.inThisWindow(e.cwd)) continue;
       rows.push({
         id: e.id, pid: null, name: displayName({ sessionId: e.id, cwd: e.cwd, name: e.name }), cwd: e.cwd,
@@ -472,7 +481,7 @@ class Tracker {
       const dismissed = this.dismissed.has(id);
       if (!showAll && !this.inThisWindow(r.cwd)) continue;
       const since = r.statusUpdatedAt || r.updatedAt || r.startedAt || now;
-      if (!dismissed && !attention && status === 'idle' && now - since > hideAfter) continue;
+      if (dismissed && this.removedExpired(id, now)) continue;
       rows.push({
         id, pid: r.pid, name: displayName(r), cwd: r.cwd || '',
         repo: path.basename(r.cwd || '') || '?', status, attention, dismissed,
