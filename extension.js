@@ -14,6 +14,11 @@ const AUTO_CLOSED_KEY = 'claudeSessions.autoClosed';
 // Without the session-trail mod nothing says when you left a closed session: move it after this.
 const NO_TRAIL_CLOSE_MS = 2 * 60e3;
 const SHOW_ALL_KEY = 'claudeSessions.showAllWindows';
+// The sessions the panel lists, saved so they come back after VS Code restarts.
+const OPEN_KEY = 'claudeSessions.open';
+// A session of this window's folder that stops while VS Code keeps running was ended on purpose and
+// leaves the saved list after this long; when VS Code itself closes, the panel is gone well before.
+const ENDED_GRACE_MS = 30e3;
 
 function cfg() { return vscode.workspace.getConfiguration('claudeSessions'); }
 function sessionsDir() { return cfg().get('sessionsDir') || path.join(os.homedir(), '.claude', 'sessions'); }
@@ -39,7 +44,8 @@ function pidAlive(rec) {
   return true;
 }
 
-function readRegistry() {
+// Live sessions only, or with `ended` the records left behind by processes that have stopped.
+function readRegistry(ended) {
   const dir = sessionsDir();
   let files = [];
   try { files = fs.readdirSync(dir).filter(f => f.endsWith('.json')); } catch { return []; }
@@ -48,7 +54,7 @@ function readRegistry() {
     let rec;
     try { rec = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { continue; }
     if (!rec || !rec.sessionId || !rec.pid) continue;
-    if (!pidAlive(rec)) continue;
+    if (pidAlive(rec) === !!ended) continue;
     const prev = byId.get(rec.sessionId);
     if (!prev || (rec.startedAt || 0) > (prev.startedAt || 0)) byId.set(rec.sessionId, rec);
   }
@@ -263,13 +269,97 @@ class Tracker {
     this.context = context;
     this.prevStatus = new Map();   // sessionId -> last seen status
     this.attention = new Map();    // sessionId -> 'ready' | 'waiting'
-    this.dismissed = new Set(context.globalState.get(DISMISSED_KEY, []));
     this.autoClosed = new Set(context.globalState.get(AUTO_CLOSED_KEY, [])); // "<id>:<closedAt>" already moved once
     this.firstLoad = true;
     this.sessions = [];
+
+    // The Removed list does not outlive VS Code: keep only removals of sessions still running.
+    const live = readRegistry();
+    const liveIds = new Set(live.map(r => r.sessionId));
+    const removed = context.globalState.get(DISMISSED_KEY, []);
+    this.dismissed = new Set(removed.filter(id => liveIds.has(id)));
+    if (this.dismissed.size !== removed.length) void this.saveDismissed();
+
+    // The listed sessions come back after a restart as "not running" rows; a click reopens one.
+    this.known = new Map();       // sessionId -> { id, cwd, name, since, startedAt }, as last seen
+    this.kept = new Map();        // sessionId -> entry: what the saved list holds
+    this.liveIds = liveIds;       // live at the last refresh
+    this.liveThisRun = new Set(); // seen running since VS Code started
+    this.goneAt = new Map();      // sessionId -> when a session of this window was first seen stopped
+    let open = context.globalState.get(OPEN_KEY);
+    if (!Array.isArray(open)) open = this.listedBeforeUpgrade(new Set(removed));
+    for (const e of open) if (e && e.id) { this.known.set(e.id, e); this.kept.set(e.id, e); }
   }
 
+  // First run after an upgrade: nothing saved yet, so rebuild the list from the records stopped
+  // sessions leave in the registry, the ones the panel was showing (recent, not removed, not closed).
+  listedBeforeUpgrade(removed) {
+    const now = Date.now();
+    const out = [];
+    for (const r of readRegistry(true)) {
+      const e = this.entryOf(r, now);
+      if (removed.has(e.id) || now - e.since > this.hideAfter() || readTranscript(r).closed) continue;
+      out.push(e);
+    }
+    return out;
+  }
+
+  entryOf(r, now) {
+    const since = r.statusUpdatedAt || r.updatedAt || r.startedAt || now;
+    return { id: r.sessionId, cwd: r.cwd || '', name: displayName(r), since, startedAt: r.startedAt || since };
+  }
+
+  hideAfter() { return (cfg().get('idleHideHours') || 12) * 3600e3; }
+
   saveDismissed() { return this.context.globalState.update(DISMISSED_KEY, [...this.dismissed]); }
+
+  saveKept() {
+    const value = [...this.kept.values()].sort((a, b) => (a.id < b.id ? -1 : 1));
+    return this.context.globalState.update(OPEN_KEY, value);
+  }
+
+  // Whether a session's folder is this window's (a window with no folder owns none).
+  ownedHere(cwd) {
+    const folders = (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath.replace(/\/$/, ''));
+    return !!cwd && folders.some(f => cwd === f || cwd.startsWith(f + '/'));
+  }
+
+  // Stopped while this window kept running: ended on purpose, so not shown as "not running".
+  endedHere(id, cwd) { return this.liveThisRun.has(id) && !this.liveIds.has(id) && this.ownedHere(cwd); }
+
+  // Rebuild the saved list. Running sessions the panel lists are saved as they are now. A stopped
+  // session of this window's folder stays until removed, aged out, closed, or ended while VS Code
+  // ran. Another window's stopped sessions are that window's to drop: the saved copy is followed.
+  keep(regs, now) {
+    const hideAfter = this.hideAfter();
+    const stored = new Map((this.context.globalState.get(OPEN_KEY) || []).filter(e => e && e.id).map(e => [e.id, e]));
+    const next = new Map();
+    this.liveIds = new Set(regs.map(r => r.sessionId));
+    for (const r of regs) {
+      const e = this.entryOf(r, now);
+      const status = r.status || 'idle';
+      this.known.set(e.id, e);
+      this.liveThisRun.add(e.id);
+      this.goneAt.delete(e.id);
+      const listed = this.attention.has(e.id) || status !== 'idle' || now - e.since <= hideAfter;
+      if (listed && !this.dismissed.has(e.id) && !(status === 'idle' && readTranscript(r).closed)) next.set(e.id, e);
+    }
+    const carry = (id, e) => {
+      if (this.liveIds.has(id) || this.dismissed.has(id) || now - (e.since || 0) > hideAfter) return;
+      if (this.endedHere(id, e.cwd)) {
+        if (!this.goneAt.has(id)) this.goneAt.set(id, now);
+        if (now - this.goneAt.get(id) > ENDED_GRACE_MS) return;
+      }
+      if (readTranscript({ sessionId: id, cwd: e.cwd }).closed) return;
+      if (!this.liveThisRun.has(id)) this.known.set(id, e);
+      next.set(id, e);
+    };
+    for (const [id, e] of this.kept) if (this.ownedHere(e.cwd)) carry(id, e);
+    for (const [id, e] of stored) if (!this.ownedHere(e.cwd)) carry(id, e);
+    this.kept = next;
+    const sorted = m => JSON.stringify([...m.values()].sort((a, b) => (a.id < b.id ? -1 : 1)));
+    if (sorted(next) !== sorted(stored)) void this.saveKept();
+  }
 
   refresh() {
     const regs = readRegistry();
@@ -331,6 +421,7 @@ class Tracker {
     }
     this.firstLoad = false;
     this.sessions = regs;
+    this.keep(regs, now);
   }
 
   markAutoClosed(key) {
@@ -340,8 +431,16 @@ class Tracker {
     void this.context.globalState.update(AUTO_CLOSED_KEY, keep);
   }
 
-  undismiss(id) { if (this.dismissed.delete(id)) void this.saveDismissed(); }
-  dismiss(id) { this.dismissed.add(id); this.attention.delete(id); void this.saveDismissed(); }
+  undismiss(id) {
+    if (!this.dismissed.delete(id)) return;
+    void this.saveDismissed();
+    const e = this.known.get(id);
+    if (e && !this.liveIds.has(id)) { this.kept.set(id, e); void this.saveKept(); }
+  }
+  dismiss(id) {
+    this.dismissed.add(id); this.attention.delete(id); void this.saveDismissed();
+    if (this.kept.delete(id)) void this.saveKept();
+  }
   restore(id) { this.undismiss(id); }
   ack(id) { this.attention.delete(id); }
 
@@ -353,8 +452,19 @@ class Tracker {
 
   view(showAll) {
     const now = Date.now();
-    const hideAfter = (cfg().get('idleHideHours') || 12) * 3600e3;
+    const hideAfter = this.hideAfter();
     const rows = [];
+    for (const e of this.known.values()) {
+      if (this.liveIds.has(e.id) || this.endedHere(e.id, e.cwd)) continue;
+      const dismissed = this.dismissed.has(e.id);
+      if (!dismissed && !this.kept.has(e.id)) continue;
+      if (!showAll && !this.inThisWindow(e.cwd)) continue;
+      rows.push({
+        id: e.id, pid: null, name: displayName({ sessionId: e.id, cwd: e.cwd, name: e.name }), cwd: e.cwd,
+        repo: path.basename(e.cwd) || '?', status: 'offline', attention: null, dismissed,
+        waitingFor: '', since: e.since, startedAt: e.startedAt || e.since, closed: false,
+      });
+    }
     for (const r of this.sessions) {
       const id = r.sessionId;
       const status = r.status || 'idle';

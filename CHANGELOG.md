@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.0 — 2026-10-24
+The session list survives a VS Code restart: sessions listed when VS Code closes come back as "not running" rows, and a click reopens one. The Removed list is cleared on restart. On the first start after upgrading, the list is rebuilt from the records the stopped sessions left in the registry.
+
 ## 0.5.1 — 2026-10-23
 A finished session now also leaves when you switch away with a click in this panel: another session shown since counts as leaving it. The panel watches the trail folder, so it leaves at once.
 

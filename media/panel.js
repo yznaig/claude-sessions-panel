@@ -15,6 +15,7 @@
   }
   function label(r) {
     if (r.closed) return '✓ closed';
+    if (r.status === 'offline') return 'not running';
     if (r.attention === 'waiting') return r.waitingFor ? 'needs you: ' + r.waitingFor : 'needs you';
     if (r.attention === 'ready') return 'response ready';
     if (r.status === 'busy') return 'running';
@@ -25,8 +26,9 @@
 
   function row(r) {
     const kind = r.closed ? 'closed' : (r.attention || r.status);
-    const d = el('div', 'row ' + (r.attention || '') + (r.closed ? ' closedRow' : '') + (r.dismissed ? ' dismissedRow' : ''));
-    d.title = r.cwd + '\n' + r.id;
+    const offline = r.status === 'offline';
+    const d = el('div', 'row ' + (r.attention || '') + (r.closed ? ' closedRow' : '') + (offline ? ' offlineRow' : '') + (r.dismissed ? ' dismissedRow' : ''));
+    d.title = r.cwd + '\n' + r.id + (offline ? '\nNot running since VS Code restarted: click to reopen' : '');
     d.appendChild(el('span', 'dot ' + kind));
     d.appendChild(el('span', 'name', r.name));
     d.appendChild(el('span', 'repo', r.repo));
