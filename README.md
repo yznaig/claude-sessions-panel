@@ -13,8 +13,9 @@ A VS Code panel tab (next to Terminal) that lists your live Claude Code sessions
 - **Alt+Q** jumps back to the session you looked at before this one. Keep pressing to walk further back; **Alt+Shift+Q** walks forward again. Switching to a session yourself starts a fresh walk from there. It needs the companion mod below.
 - **Alt+A** asks an aside about whatever you highlighted in a Claude reply: select the text, press Alt+A, and the session on screen opens a side question on it above its prompt box, answered from a fork of the conversation. Your clipboard is left as it was. It needs the `side-fork` mod in the session as well as the companion mod below.
 - **This window / All windows** filters to sessions whose folder is inside this window's workspace. Two windows, two lists.
-- **Closed sessions leave on their own.** When a session's last turn ran the `anything-left` skill and its answer opens with "Good to close", the row turns into a dim **✓ closed** with no sound or badge. Once you switch away from it, it moves to Removed. Keep working in it and it comes back. Without the companion mod the panel can't tell when you left, so it moves the session two minutes after the answer instead. The skill's name and the phrase are constants at the top of the transcript section in `extension.js`.
+- **Closed sessions leave on their own.** When a session's last turn ran the `anything-left` skill and its answer opens with "Good to close", the row turns into a dim **✓ closed** with no sound or badge. Once you switch away from it, it moves to Removed. Keep working in it and it comes back. Without the companion mod the panel can't tell when you left, so it moves the session two minutes after the answer instead. The skill's name and the phrase are constants at the top of the transcript section in `core.js`.
 - Idle sessions stay on the list however long they sit; only you, a "Good to close", or ending the session takes one off.
+- **↻ Reload Panel** (panel title bar) loads the newest installed version of the panel without reloading the window, so running Claude sessions are not interrupted. Installing a new version also offers it in a notification. Rows, ready and waiting marks, and the Removed list carry over.
 
 ## How it works
 
@@ -30,6 +31,8 @@ code --install-extension claude-sessions-panel-0.1.0.vsix
 ```
 
 Under WSL run that from a VS Code terminal so it installs into the WSL side (the extension runs where Claude Code runs). Then reload the window and open the panel (`Ctrl+J`), tab **Claude Sessions**.
+
+For later versions, press **↻ Reload Panel** instead of reloading the window. That covers changes to `core.js` and `media/`. A change to `extension.js` (the loader) or to the `contributes` section of `package.json` (commands, keys, settings, menus) still needs one window reload.
 
 ## Companion mod: session-trail
 

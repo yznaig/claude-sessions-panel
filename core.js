@@ -2,6 +2,8 @@
 // Reads ~/.claude/sessions/<pid>.json (written by Claude Code itself), derives
 // running / ready / waiting per session, plays a sound on transitions, and
 // focuses a session through the Claude Code extension's open command.
+// extension.js loads this file and can swap in a newer installed copy without a window
+// reload (Reload Panel): start() takes what the old copy handed over in `carried`.
 'use strict';
 const vscode = require('vscode');
 const fs = require('fs');
@@ -267,15 +269,17 @@ async function pickSound(kind) {
 // ---- tracker ----------------------------------------------------------------
 
 class Tracker {
-  constructor(context) {
+  // `carried`: what carry() returned in the copy this one replaces, on a panel reload.
+  constructor(context, carried) {
     this.context = context;
-    this.prevStatus = new Map();   // sessionId -> last seen status
-    this.attention = new Map();    // sessionId -> 'ready' | 'waiting'
+    this.prevStatus = new Map(carried ? carried.prevStatus : []);   // sessionId -> last seen status
+    this.attention = new Map(carried ? carried.attention : []);     // sessionId -> 'ready' | 'waiting'
     this.autoClosed = new Set(context.globalState.get(AUTO_CLOSED_KEY, [])); // "<id>:<closedAt>" already moved once
-    this.firstLoad = true;
+    this.firstLoad = !carried;
     this.sessions = [];
 
     // The Removed list does not outlive VS Code: keep only removals of sessions still running.
+    // A panel reload is not a restart, so it keeps them all.
     // Saved as [id, removedAt]; versions before 0.7.0 saved bare ids, counted as removed now.
     const live = readRegistry();
     const liveIds = new Set(live.map(r => r.sessionId));
@@ -284,19 +288,27 @@ class Tracker {
     this.dismissed = new Map();     // sessionId -> when it was removed
     for (const x of removed) {
       const [id, at] = Array.isArray(x) ? x : [x, started];
-      if (liveIds.has(id)) this.dismissed.set(id, at || started);
+      if (carried || liveIds.has(id)) this.dismissed.set(id, at || started);
     }
     if (this.dismissed.size !== removed.length || removed.some(x => !Array.isArray(x))) void this.saveDismissed();
 
     // The listed sessions come back after a restart as "not running" rows; a click reopens one.
-    this.known = new Map();       // sessionId -> { id, cwd, name, since, startedAt }, as last seen
+    this.known = new Map(carried ? carried.known : []); // sessionId -> { id, cwd, name, since, startedAt }, as last seen
     this.kept = new Map();        // sessionId -> entry: what the saved list holds
     this.liveIds = liveIds;       // live at the last refresh
-    this.liveThisRun = new Set(); // seen running since VS Code started
-    this.goneAt = new Map();      // sessionId -> when a session of this window was first seen stopped
+    this.liveThisRun = new Set(carried ? carried.liveThisRun : []); // seen running since VS Code started
+    this.goneAt = new Map(carried ? carried.goneAt : []); // sessionId -> when a session of this window was first seen stopped
     let open = context.globalState.get(OPEN_KEY);
     if (!Array.isArray(open)) open = this.listedBeforeUpgrade(new Set(removed.map(x => (Array.isArray(x) ? x[0] : x))));
     for (const e of open) if (e && e.id) { this.known.set(e.id, e); this.kept.set(e.id, e); }
+  }
+
+  // The in-memory state a panel reload hands to the next copy (the rest is in globalState).
+  carry() {
+    return {
+      prevStatus: [...this.prevStatus], attention: [...this.attention], known: [...this.known],
+      liveThisRun: [...this.liveThisRun], goneAt: [...this.goneAt],
+    };
   }
 
   // First run after an upgrade: nothing saved yet, so rebuild the list from the records stopped
@@ -498,21 +510,32 @@ class Tracker {
 // ---- webview ----------------------------------------------------------------
 
 class Provider {
-  constructor(context, tracker) {
+  constructor(context, tracker, rootUri, carried) {
     this.context = context;
     this.tracker = tracker;
+    this.rootUri = rootUri;
     this.view = null;
+    this.listeners = [];
     this.showAll = context.globalState.get(SHOW_ALL_KEY, false);
-    this.showDismissed = false;
+    this.showDismissed = !!(carried && carried.showDismissed);
   }
 
+  // Called by extension.js with the panel's view, when VS Code first shows it or after a reload.
   resolveWebviewView(view) {
+    this.detach();
     this.view = view;
-    view.webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')] };
-    view.webview.html = html(view.webview, this.context);
-    view.webview.onDidReceiveMessage(m => this.onMessage(m));
-    view.onDidChangeVisibility(() => this.push());
+    view.webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.rootUri, 'media')] };
+    view.webview.html = html(view.webview, this.rootUri);
+    this.listeners.push(
+      view.webview.onDidReceiveMessage(m => this.onMessage(m)),
+      view.onDidChangeVisibility(() => this.push()),
+    );
     this.push();
+  }
+
+  detach() {
+    for (const l of this.listeners) l.dispose();
+    this.listeners = [];
   }
 
   async onMessage(m) {
@@ -556,10 +579,10 @@ class Provider {
   }
 }
 
-function html(webview, context) {
+function html(webview, rootUri) {
   const nonce = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-  const script = webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media', 'panel.js'));
-  const style = webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media', 'panel.css'));
+  const script = webview.asWebviewUri(vscode.Uri.joinPath(rootUri, 'media', 'panel.js'));
+  const style = webview.asWebviewUri(vscode.Uri.joinPath(rootUri, 'media', 'panel.css'));
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
 <link rel="stylesheet" href="${style}"><title>Claude Sessions</title></head>
@@ -696,14 +719,18 @@ async function askAside(history) {
   vscode.window.setStatusBarMessage(`Aside: "${shown.length > 50 ? shown.slice(0, 49) + '…' : shown}"`, 3000);
 }
 
-// ---- activation -------------------------------------------------------------
+// ---- start ------------------------------------------------------------------
 
-function activate(context) {
-  extensionRoot = context.extensionPath || __dirname;
-  const tracker = new Tracker(context);
-  const provider = new Provider(context, tracker);
+// host: { context, root (this copy's folder), view (the panel's view, if VS Code has shown it), carried }.
+// Returns { attach(view), stop() }; stop() undoes everything start did and returns the state to carry.
+function start(host) {
+  const { context } = host;
+  extensionRoot = host.root;
+  const subs = [];
+  const tracker = new Tracker(context, host.carried);
+  const provider = new Provider(context, tracker, vscode.Uri.file(host.root), host.carried);
   const history = new History(tracker);
-  context.subscriptions.push(vscode.window.registerWebviewViewProvider('claudeSessions.view', provider, { webviewOptions: { retainContextWhenHidden: true } }));
+  subs.push({ dispose: () => provider.detach() });
 
   let timer = null;
   const tick = () => { tracker.refresh(); provider.push(); };
@@ -715,10 +742,10 @@ function activate(context) {
   let trailWatcher = null; // a session shown or hidden: closed sessions leave at once
   try { fs.mkdirSync(trailDir(), { recursive: true }); trailWatcher = fs.watch(trailDir(), { persistent: false }, schedule); } catch { /* no watch: the poll covers it */ }
   const poll = setInterval(tick, 5000); // fallback: pid deaths and missed events
-  context.subscriptions.push({ dispose: () => { if (watcher) watcher.close(); if (trailWatcher) trailWatcher.close(); clearInterval(poll); if (timer) clearTimeout(timer); } });
-  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('claudeSessions')) tick(); }));
+  subs.push({ dispose: () => { if (watcher) watcher.close(); if (trailWatcher) trailWatcher.close(); clearInterval(poll); if (timer) clearTimeout(timer); } });
+  subs.push(vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('claudeSessions')) tick(); }));
 
-  context.subscriptions.push(
+  subs.push(
     vscode.commands.registerCommand('claudeSessions.refresh', tick),
     vscode.commands.registerCommand('claudeSessions.toggleAllWindows', () => provider.toggleAll()),
     vscode.commands.registerCommand('claudeSessions.toggleSound', async () => {
@@ -737,7 +764,15 @@ function activate(context) {
     vscode.commands.registerCommand('claudeSessions.goForward', () => history.step(1)),
     vscode.commands.registerCommand('claudeSessions.askAside', () => askAside(history)),
   );
+
+  if (host.view) provider.resolveWebviewView(host.view);
+  return {
+    attach: view => provider.resolveWebviewView(view),
+    stop() {
+      for (const s of subs.splice(0)) { try { s.dispose(); } catch { /* keep going */ } }
+      return { ...tracker.carry(), showDismissed: provider.showDismissed };
+    },
+  };
 }
 
-function deactivate() {}
-module.exports = { activate, deactivate };
+module.exports = { start };
