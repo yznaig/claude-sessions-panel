@@ -543,8 +543,7 @@ class Provider {
     switch (m.type) {
       case 'focus': {
         t.ack(m.id);
-        const cmd = cfg().get('focusCommand') || 'claude-vscode.editor.open';
-        try { await vscode.commands.executeCommand(cmd, m.id); }
+        try { await openSession(m.id); }
         catch (e) { vscode.window.showWarningMessage(`Claude Sessions: could not focus session (${e.message}).`); }
         break;
       }
@@ -577,6 +576,17 @@ class Provider {
       });
     }
   }
+}
+
+// Opens a session where Claude Code's "Preferred Location" setting says: the chat sidebar when it
+// is "sidebar", unless the session already has its own tab, which is then revealed. Without the
+// programmatic flag, editor.open always opens a tab for a session not on screen (every restored
+// "not running" row) and switches that setting to tabs as a side effect.
+const OPEN_COMMAND = 'claude-vscode.editor.open';
+function openSession(id) {
+  const cmd = cfg().get('focusCommand') || OPEN_COMMAND;
+  if (cmd !== OPEN_COMMAND) return vscode.commands.executeCommand(cmd, id);
+  return vscode.commands.executeCommand(cmd, id, undefined, undefined, undefined, undefined, { programmatic: 'honor-preferred-location' });
 }
 
 function html(webview, rootUri) {
@@ -661,9 +671,8 @@ class History {
     }
     this.walk.at = next;
     const target = this.walk.list[next];
-    const cmd = cfg().get('focusCommand') || 'claude-vscode.editor.open';
     try {
-      await vscode.commands.executeCommand(cmd, target.id);
+      await openSession(target.id);
       vscode.window.setStatusBarMessage(`Claude: ${target.name}  (${next + 1}/${this.walk.list.length})`, 2500);
     } catch (e) {
       vscode.window.showWarningMessage(`Claude Sessions: could not open that session (${e.message}).`);

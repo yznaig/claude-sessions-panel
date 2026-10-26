@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.9.1 — 2026-10-26
+Clicking a row (or Alt+Q) opens the session where Claude Code's **Preferred Location** setting says: the chat sidebar when it is set to sidebar, or the session's own tab when it already has one. Before, a session not on screen (every "not running" row after a restart) always opened in a new tab and switched that setting to tabs.
+
 ## 0.9.0 — 2026-10-26
 A **Usage** view: one card per Claude Code and Codex login on the machine (every `~/.claude*` and `~/.codex*` folder with a login), with each usage window's percent and reset time. Reads on open and on ↻ only. A Claude login with an expired token shows its last reading and a **Wake** button that renews it through one tiny `claude -p` prompt. The view has its own activity-bar icon, so it can sit in the right sidebar while Sessions stays in the bottom panel. Needs one window reload (new view and command).
 

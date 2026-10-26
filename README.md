@@ -7,7 +7,7 @@ A VS Code panel tab (next to Terminal) that lists your live Claude Code sessions
 - **Blue** — it is waiting on you: a permission, a question, an MCP dialog.
 - **Badge** on the panel tab counts sessions that need you, so it shows even when the panel is collapsed.
 - **Sound** on each green and blue transition. Default green is VS Code's success sound, default blue is VS Code's "chat needs your action" sound. **Claude Sessions: Pick Ready Sound** / **Pick Waiting Sound** preview the bundled set as you arrow through it; any `.wav` path works too, so you can drop in your own editor's chime.
-- **Click a row** to focus that session (it reveals its tab, or activates it in the Claude sidebar).
+- **Click a row** to focus that session. It opens where Claude Code's *Preferred Location* setting (`claudeCode.preferredLocation`) says: set it to `sidebar` and sessions open in the chat sidebar, except one that already has its own tab, which is revealed.
 - **✕** removes a session you're done with. **Removed (n)** shows them; **↩** brings one back. Any new activity in a removed session brings it back on its own. The Removed list is cleared when VS Code restarts, and each removed session leaves it 12 hours after you removed it (setting `claudeSessions.removedClearHours`).
 - **The list survives a restart.** Sessions listed when VS Code closes come back as dim **not running** rows; click one to reopen it, and it turns back into a live row. A session you end while VS Code keeps running leaves the list as before.
 - **Alt+Q** jumps back to the session you looked at before this one. Keep pressing to walk further back; **Alt+Shift+Q** walks forward again. Switching to a session yourself starts a fresh walk from there. It needs the companion mod below.
