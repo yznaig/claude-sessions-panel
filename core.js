@@ -9,6 +9,7 @@ const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 const DISMISSED_KEY = 'claudeSessions.dismissed';
@@ -566,6 +567,7 @@ class Provider {
   push() {
     const rows = this.tracker.view(this.showAll);
     const live = rows.filter(r => !r.dismissed);
+    writeSnapshot(live, this.showAll);
     const needing = live.filter(r => r.attention).length;
     if (this.view) {
       this.view.badge = needing ? { value: needing, tooltip: `${needing} Claude session${needing === 1 ? '' : 's'} need${needing === 1 ? 's' : ''} you` } : undefined;
@@ -587,6 +589,35 @@ function openSession(id) {
   const cmd = cfg().get('focusCommand') || OPEN_COMMAND;
   if (cmd !== OPEN_COMMAND) return vscode.commands.executeCommand(cmd, id);
   return vscode.commands.executeCommand(cmd, id, undefined, undefined, undefined, undefined, { programmatic: 'honor-preferred-location' });
+}
+
+// ---- snapshot for the sessions skill -------------------------------------------
+//
+// The rows this window's panel shows, written to ~/.claude/sessions-panel/<window>.json each
+// time they change, so a Claude session can read "the sessions in my panel" (the companion
+// plugin's sessions skill). One file per window, keyed by its folders.
+
+function snapshotDir() { return path.join(os.homedir(), '.claude', 'sessions-panel'); }
+let lastSnapshot = '';
+function writeSnapshot(rows, showAll) {
+  const folders = (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath);
+  const body = {
+    folders, showAll,
+    rows: rows.map(r => ({
+      id: r.id, name: r.name, cwd: r.cwd,
+      state: r.attention || (r.closed ? 'closed' : r.status === 'offline' ? 'not running' : r.status),
+    })),
+  };
+  const text = JSON.stringify(body);
+  if (text === lastSnapshot) return;
+  lastSnapshot = text;
+  const key = crypto.createHash('sha1').update(folders.join('\n') || 'no-folder').digest('hex').slice(0, 12);
+  const file = path.join(snapshotDir(), key + '.json');
+  try {
+    fs.mkdirSync(snapshotDir(), { recursive: true });
+    fs.writeFileSync(file + '.tmp', JSON.stringify({ ...body, updatedAt: Date.now() }, null, 1));
+    fs.renameSync(file + '.tmp', file);
+  } catch { /* the skill falls back to the live registry */ }
 }
 
 function html(webview, rootUri) {

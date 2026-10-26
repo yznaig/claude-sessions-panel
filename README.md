@@ -45,7 +45,7 @@ For later versions, press **↻ Reload Panel** instead of reloading the window. 
 
 ## Companion mod: session-trail
 
-The session history behind Alt+Q needs to know which session VS Code is showing, which only Claude Code itself sees. The `session-trail` mod in [`mod/`](mod) records it: each time VS Code shows or hides a session it writes `~/.claude/session-trail/<session id>.json`. Install it from a clone of this repo:
+The plugin carries the read-sessions skill above, and the session history behind Alt+Q, which needs to know which session VS Code is showing, which only Claude Code itself sees. The `session-trail` mod in [`mod/`](mod) records it: each time VS Code shows or hides a session it writes `~/.claude/session-trail/<session id>.json`. Install it from a clone of this repo:
 
 ```bash
 claude plugin marketplace add /path/to/claude-sessions-panel
@@ -53,6 +53,16 @@ claude plugin install session-trail@claude-sessions-panel
 ```
 
 Sessions pick it up when they start, or after `/reload-plugins`.
+
+## Reading your sessions from a session: read-sessions
+
+The companion plugin below also carries the **read-sessions** skill. In any Claude session, say things like:
+
+- "read the sessions in my panel for context": the rows this window's panel shows;
+- "look at my recent sessions on the billing page": the last 7 days, ranked by topic;
+- "dig through all the sessions that touched the auth flow": every session on the machine, ranked by topic and by the files they edited.
+
+It lists what it found, reads them (whole for a few, start and end for more, with helper agents past a dozen), checks what they claim against the repo, and reports where things stand, saying how many it read and at what depth. For the panel scope the panel writes its list to `~/.claude/sessions-panel/<window>.json` each time it changes (one file per VS Code window). The finder behind it runs on its own too: `python3 mod/skills/read-sessions/scripts/find_sessions.py --help`.
 
 ## Settings
 

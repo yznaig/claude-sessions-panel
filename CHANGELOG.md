@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.10.0 — 2026-10-26
+The panel writes the rows it shows to `~/.claude/sessions-panel/<window>.json` whenever they change, and the companion plugin (0.2.0) gains the **read-sessions** skill: ask a session to read "the sessions in my panel", "my recent sessions on X" or "all the sessions that touched X", and it finds them, reads them to a depth that fits the count, and reports one consolidated picture. Its finder, `find_sessions.py`, also works on its own.
+
 ## 0.9.1 — 2026-10-26
 Clicking a row (or Alt+Q) opens the session where Claude Code's **Preferred Location** setting says: the chat sidebar when it is set to sidebar, or the session's own tab when it already has one. Before, a session not on screen (every "not running" row after a restart) always opened in a new tab and switched that setting to tabs.
 
