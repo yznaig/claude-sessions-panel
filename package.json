@@ -1,8 +1,8 @@
 {
   "name": "claude-sessions-panel",
   "displayName": "Claude Sessions",
-  "description": "A bottom-panel tab listing your live Claude Code sessions: running, response ready (green), needs an answer (blue). Click to focus the session.",
-  "version": "0.8.0",
+  "description": "A bottom-panel tab listing your live Claude Code sessions: running, response ready (green), needs an answer (blue). Click to focus the session. Plus a Usage view: the current usage windows of every Claude Code and Codex login on the machine.",
+  "version": "0.9.0",
   "publisher": "yznaig",
   "license": "MIT",
   "author": "yznaig",
@@ -16,7 +16,8 @@
     "claude",
     "claude code",
     "sessions",
-    "notifications"
+    "notifications",
+    "usage"
   ],
   "main": "./extension.js",
   "extensionKind": [
@@ -33,6 +34,13 @@
           "title": "Claude Sessions",
           "icon": "resources/icon.svg"
         }
+      ],
+      "activitybar": [
+        {
+          "id": "claudeUsage",
+          "title": "Claude & Codex Usage",
+          "icon": "resources/usage.svg"
+        }
       ]
     },
     "views": {
@@ -41,6 +49,13 @@
           "type": "webview",
           "id": "claudeSessions.view",
           "name": "Sessions"
+        }
+      ],
+      "claudeUsage": [
+        {
+          "type": "webview",
+          "id": "claudeSessions.usage",
+          "name": "Usage"
         }
       ]
     },
@@ -98,6 +113,12 @@
         "command": "claudeSessions.askAside",
         "title": "Ask Aside on Selection",
         "category": "Claude Sessions"
+      },
+      {
+        "command": "claudeSessions.refreshUsage",
+        "title": "Refresh Usage",
+        "category": "Claude Sessions",
+        "icon": "$(refresh)"
       }
     ],
     "menus": {
@@ -121,6 +142,11 @@
           "command": "claudeSessions.reloadPanel",
           "when": "view == claudeSessions.view",
           "group": "navigation@4"
+        },
+        {
+          "command": "claudeSessions.refreshUsage",
+          "when": "view == claudeSessions.usage",
+          "group": "navigation@1"
         }
       ]
     },

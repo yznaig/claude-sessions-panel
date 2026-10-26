@@ -17,6 +17,15 @@ A VS Code panel tab (next to Terminal) that lists your live Claude Code sessions
 - Idle sessions stay on the list however long they sit; only you, a "Good to close", or ending the session takes one off.
 - **↻ Reload Panel** (panel title bar) loads the newest installed version of the panel without reloading the window, so running Claude sessions are not interrupted. Installing a new version also offers it in a notification. Rows, ready and waiting marks, and the Removed list carry over.
 
+## Usage view
+
+A second view, **Usage**, shows the current usage windows of every Claude Code and Codex login on the machine, one card per login: a bar per window (5-hour, weekly, per-model weekly), the percent used, and when it resets. It has its own icon in the activity bar; drag that icon to the Secondary Side Bar (the right side) and it stays there, open next to the Sessions tab.
+
+- **Reads on demand.** It reads once when you first open it in a window, then only when you press **↻**. It never polls.
+- **Accounts are found, not configured.** Every `~/.claude*` folder with a `.credentials.json` and every `~/.codex*` folder with a ChatGPT sign-in in `auth.json` gets a card, labelled by the folder's suffix (`~/.claude` is *default*, `~/.claude-work` is *work*). That is the `CLAUDE_CONFIG_DIR` / `CODEX_HOME` way of keeping several logins side by side.
+- **Asleep and Wake.** Claude Code renews a login's token only while it runs on that login, so a login nobody has used for a while shows *Asleep* with its last reading, dimmed. **Wake** runs one tiny Haiku prompt on that login (`claude -p`, no tools, nothing saved), which makes Claude Code renew it, then reads again. It uses a sliver of that account's usage. The panel never renews a token itself, because a renewal racing a running session's can sign that session out.
+- **Where the numbers come from.** Each login's token is read from its file and sent only to the service that issued it, to the same usage endpoint the CLI calls for `/usage` (Claude) or `/status` (Codex). Neither endpoint is documented for outside use; if one changes, those cards show the error and the rest keep working.
+
 ## How it works
 
 Claude Code keeps a registry of its running processes at `~/.claude/sessions/<pid>.json` with the session id, folder, name, and a status of `busy`, `idle` or `waiting`. The extension watches that folder, drops entries whose process is gone, and derives **ready** from a `busy → idle` change. The sessions it lists are saved in VS Code's extension storage, which is how they come back after a restart. Nothing is injected into Claude Code; no hooks are needed.

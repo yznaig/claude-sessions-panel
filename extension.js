@@ -41,25 +41,40 @@ function requireFresh(dir) {
   return require(path.join(dir, 'core.js'));
 }
 
+// The Usage view's module from the same copy; a stub when that copy predates it.
+const NO_USAGE = { start() { return { attach() {}, stop() { return null; } }; } };
+function usageFrom(dir) {
+  const file = path.join(dir, 'usage.js');
+  return fs.existsSync(file) ? require(file) : NO_USAGE;
+}
+
 function activate(context) {
   const own = context.extensionPath;
   let view = null;
   let copy = { dir: own, version: versionOf(own) };
   let core = requireFresh(own).start({ context, root: own, view: null, carried: null });
+  let usageView = null;
+  let usage = usageFrom(own).start({ context, root: own, view: null });
   let offered = copy.version; // the newest version already offered, so each is offered once
 
   context.subscriptions.push(vscode.window.registerWebviewViewProvider('claudeSessions.view', {
     resolveWebviewView(v) { view = v; core.attach(v); },
   }, { webviewOptions: { retainContextWhenHidden: true } }));
+  context.subscriptions.push(vscode.window.registerWebviewViewProvider('claudeSessions.usage', {
+    resolveWebviewView(v) { usageView = v; usage.attach(v); },
+  }, { webviewOptions: { retainContextWhenHidden: true } }));
 
   function reload() {
     const next = newestCopy(own);
     const carried = core.stop();
+    try { usage.stop(); } catch { /* replaced below */ }
     try {
       core = requireFresh(next.dir).start({ context, root: next.dir, view, carried });
+      usage = usageFrom(next.dir).start({ context, root: next.dir, view: usageView });
     } catch (e) {
       try {
         core = requireFresh(copy.dir).start({ context, root: copy.dir, view, carried });
+        usage = usageFrom(copy.dir).start({ context, root: copy.dir, view: usageView });
         vscode.window.showErrorMessage(`Claude Sessions: ${next.version} failed to load, kept ${copy.version} (${e.message}).`);
       } catch (e2) {
         core = { attach() {}, stop() { return carried; } };
@@ -87,7 +102,7 @@ function activate(context) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('claudeSessions.reloadPanel', reload),
-    { dispose: () => { if (watcher) watcher.close(); clearInterval(poll); clearTimeout(pending); core.stop(); } },
+    { dispose: () => { if (watcher) watcher.close(); clearInterval(poll); clearTimeout(pending); core.stop(); usage.stop(); } },
   );
 }
 

@@ -1,0 +1,25 @@
+body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); padding: 4px 8px; margin: 0; }
+#head { display: flex; justify-content: space-between; align-items: center; padding: 2px 0 8px; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
+button { background: none; border: 1px solid var(--vscode-button-secondaryBackground); color: var(--vscode-foreground); border-radius: 3px; padding: 1px 7px; cursor: pointer; font: inherit; font-size: 0.9em; }
+button:hover { background: var(--vscode-toolbar-hoverBackground); }
+button:disabled { opacity: 0.5; cursor: default; }
+.card { border: 1px solid var(--vscode-panel-border, #444); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+.card.limited { border-color: var(--vscode-errorForeground, #f14c4c); }
+.top { display: flex; gap: 6px; align-items: baseline; }
+.kind { font-weight: 600; }
+.label { font-weight: 600; color: var(--vscode-textLink-foreground); }
+.plan { margin-left: auto; font-size: 0.85em; color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-panel-border, #444); border-radius: 8px; padding: 0 6px; white-space: nowrap; }
+.email { font-size: 0.85em; color: var(--vscode-descriptionForeground); margin: 1px 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note { font-size: 0.9em; color: var(--vscode-descriptionForeground); display: flex; gap: 8px; align-items: center; justify-content: space-between; margin: 4px 0; }
+.note.err { color: var(--vscode-errorForeground, #f14c4c); }
+.card.asleep .note span { font-style: italic; }
+.win { display: grid; grid-template-columns: minmax(56px, auto) 1fr 36px; grid-template-areas: "l b p" ". r r"; column-gap: 8px; align-items: center; margin-top: 6px; }
+.win.stale { opacity: 0.55; }
+.wlabel { grid-area: l; font-size: 0.9em; white-space: nowrap; }
+.bar { grid-area: b; height: 7px; border-radius: 4px; background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent); overflow: hidden; }
+.fill { height: 100%; border-radius: 4px; }
+.fill.low { background: var(--vscode-progressBar-background, #0e70c0); }
+.fill.mid { background: var(--vscode-editorWarning-foreground, #cca700); }
+.fill.high { background: var(--vscode-errorForeground, #f14c4c); }
+.pct { grid-area: p; text-align: right; font-variant-numeric: tabular-nums; font-size: 0.9em; }
+.reset { grid-area: r; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
