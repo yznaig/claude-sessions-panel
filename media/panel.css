@@ -4,7 +4,7 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
 #bar button:hover, .row button:hover { background: var(--vscode-toolbar-hoverBackground); }
 #bar button.on { background: var(--vscode-button-secondaryBackground); }
 .empty { color: var(--vscode-descriptionForeground); padding: 8px 2px; }
-.row { display: grid; grid-template-columns: 14px minmax(120px, 1fr) auto 0 minmax(104px, auto) 48px 22px 26px; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 4px; cursor: pointer; }
+.row { display: grid; grid-template-columns: 14px minmax(120px, 1fr) auto 20px 0 minmax(104px, auto) 48px 22px 26px; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 4px; cursor: pointer; }
 .row:hover { background: var(--vscode-list-hoverBackground); }
 .row.ready { background: color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 12%, transparent); }
 .row.waiting { background: color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 14%, transparent); }
@@ -57,6 +57,11 @@ h4 { margin: 10px 0 4px; font-weight: 600; color: var(--vscode-descriptionForegr
 .menu .sep { height: 1px; margin: 3px 0; background: var(--vscode-menu-separatorBackground, var(--vscode-widget-border, #454545)); }
 
 /* your time for a ready reply: the chip column only takes room when a row on the tab has one */
-#list.costs .row { grid-template-columns: 14px minmax(120px, 1fr) auto 132px minmax(104px, auto) 48px 22px 26px; }
+#list.costs .row { grid-template-columns: 14px minmax(120px, 1fr) auto 20px 132px minmax(104px, auto) 48px 22px 26px; }
 .chip { justify-self: end; font-size: 0.85em; font-weight: 600; color: #1e1e1e; border-radius: 10px; padding: 0 8px; white-space: nowrap; }
 .costsum { font-size: 0.85em; color: var(--vscode-descriptionForeground); padding: 6px 6px 0; }
+
+/* the star: mark a session green again (shows on hover) */
+.row .star { border: none; opacity: 0; padding: 0 2px; font-size: 1em; color: var(--vscode-testing-iconPassed, #73c991); }
+.row:hover .star { opacity: 0.8; }
+.row .star:hover { opacity: 1; }

@@ -95,6 +95,14 @@
     d.appendChild(el('span', 'dot ' + kind));
     d.appendChild(el('span', 'name', r.name));
     d.appendChild(el('span', 'repo', r.repo));
+    // The star: mark a running session green to come back to it, or clear the mark.
+    if (!r.dismissed && !r.closed && r.status !== 'offline' && r.attention !== 'waiting') {
+      const marked = r.attention === 'ready';
+      const star = el('button', 'star', marked ? '★' : '☆');
+      star.title = marked ? 'Clear the green mark' : 'Mark green to come back to it';
+      star.addEventListener('click', ev => { ev.stopPropagation(); post({ type: 'mark', id: r.id }); });
+      d.appendChild(star);
+    } else d.appendChild(el('span'));
     d.appendChild(costChip(r));
     d.appendChild(el('span', 'state ' + kind, label(r)));
     d.appendChild(el('span', 'age', age(state.now - r.since)));

@@ -575,6 +575,14 @@ class Tracker {
   }
   restore(id) { this.undismiss(id); }
   ack(id) { this.attention.delete(id); }
+  // The star: mark a running session green again to come back to it, or clear that mark.
+  // Clicking the row clears it like any green; a session that needs you stays blue.
+  toggleMark(id) {
+    if (!this.liveIds.has(id)) return;
+    const a = this.attention.get(id);
+    if (a === 'ready') this.attention.delete(id);
+    else if (!a) this.attention.set(id, 'ready');
+  }
 
   inThisWindow(cwd) {
     const folders = (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath);
@@ -730,6 +738,7 @@ class Provider {
         break;
       }
       case 'ack': t.ack(m.id); break;
+      case 'mark': t.toggleMark(m.id); break;
       case 'dismiss': t.dismiss(m.id); break;
       case 'restore': t.restore(m.id); break;
       case 'toggleAll': this.toggleAll(); return;

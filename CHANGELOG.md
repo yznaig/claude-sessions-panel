@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.13.0 — 2026-10-26
+A **☆** next to the repo name on hover marks a running session green again, so a session you looked at but still owe something stays flagged; it gets a time chip and counts on the badge like any green. Click the ★ to clear the mark, or click the row as usual. Not shown on sessions that need you, closed ones, or ones not running.
+
 ## 0.12.1 — 2026-10-26
 The time chip sits right against the row's status instead of after the repo name, and the repo pills line up down the list.
 
