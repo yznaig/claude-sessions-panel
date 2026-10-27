@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.12.1 — 2026-10-26
+The time chip sits right against the row's status instead of after the repo name, and the repo pills line up down the list.
+
 ## 0.12.0 — 2026-10-26
 **Time chips**: each session with a response ready shows roughly how long it will take you (reading time plus 45 seconds per numbered decision), colored teal to red, and ready sessions sort shortest first, with a total under the list. No window reload needed: ↻ Reload Panel picks it up.
 

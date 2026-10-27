@@ -4,7 +4,7 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
 #bar button:hover, .row button:hover { background: var(--vscode-toolbar-hoverBackground); }
 #bar button.on { background: var(--vscode-button-secondaryBackground); }
 .empty { color: var(--vscode-descriptionForeground); padding: 8px 2px; }
-.row { display: grid; grid-template-columns: 14px minmax(120px, 2fr) auto 0 auto auto 22px 26px; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 4px; cursor: pointer; }
+.row { display: grid; grid-template-columns: 14px minmax(120px, 1fr) auto 0 minmax(104px, auto) 48px 22px 26px; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 4px; cursor: pointer; }
 .row:hover { background: var(--vscode-list-hoverBackground); }
 .row.ready { background: color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 12%, transparent); }
 .row.waiting { background: color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 14%, transparent); }
@@ -17,7 +17,7 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
 @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.35); } }
 .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .repo { font-size: 0.85em; color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-panel-border, #444); border-radius: 8px; padding: 0 6px; white-space: nowrap; }
-.state { font-size: 0.9em; white-space: nowrap; }
+.state { font-size: 0.9em; white-space: nowrap; text-align: right; }
 .state.ready { color: var(--vscode-testing-iconPassed, #73c991); font-weight: 600; }
 .state.waiting { color: var(--vscode-charts-blue, #3794ff); font-weight: 600; }
 .state.busy { color: var(--vscode-progressBar-background, #0e70c0); }
@@ -57,6 +57,6 @@ h4 { margin: 10px 0 4px; font-weight: 600; color: var(--vscode-descriptionForegr
 .menu .sep { height: 1px; margin: 3px 0; background: var(--vscode-menu-separatorBackground, var(--vscode-widget-border, #454545)); }
 
 /* your time for a ready reply: the chip column only takes room when a row on the tab has one */
-#list.costs .row { grid-template-columns: 14px minmax(120px, 2fr) auto 132px auto auto 22px 26px; }
-.chip { justify-self: start; font-size: 0.85em; font-weight: 600; color: #1e1e1e; border-radius: 10px; padding: 0 8px; white-space: nowrap; }
+#list.costs .row { grid-template-columns: 14px minmax(120px, 1fr) auto 132px minmax(104px, auto) 48px 22px 26px; }
+.chip { justify-self: end; font-size: 0.85em; font-weight: 600; color: #1e1e1e; border-radius: 10px; padding: 0 8px; white-space: nowrap; }
 .costsum { font-size: 0.85em; color: var(--vscode-descriptionForeground); padding: 6px 6px 0; }
