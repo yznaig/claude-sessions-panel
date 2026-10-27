@@ -201,7 +201,8 @@
     ]
   },
   "scripts": {
-    "package": "vsce package --allow-missing-repository"
+    "package": "vsce package --allow-missing-repository",
+    "test": "node --test test/panel.test.js"
   },
   "devDependencies": {
     "@vscode/vsce": "^4.0.0"
