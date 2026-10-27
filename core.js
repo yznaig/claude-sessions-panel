@@ -13,6 +13,8 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 const SHOW_ALL_KEY = 'claudeSessions.showAllWindows';
+const STOP_AND_REMOVE = 'Stop and remove';
+const REMOVE_ONLY = 'Remove, keep it running';
 // The tab each window shows: a folder's name, or '' for Main (the unfiled sessions).
 const VIEW_FOLDER_KEY = 'claudeSessions.viewFolder';
 
@@ -21,15 +23,8 @@ function sessionsDir() { return cfg().get('sessionsDir') || path.join(os.homedir
 
 // ---- registry ---------------------------------------------------------------
 
-function procStartOf(pid) {
-  // Linux only: field 22 of /proc/<pid>/stat is the process start time in clock ticks,
-  // which is what Claude Code records as procStart. Guards against pid reuse.
-  try {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const after = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-    return after[19];
-  } catch { return null; }
-}
+const procs = require('./procs');
+const { procStartOf } = procs;
 
 function pidAlive(rec) {
   try { process.kill(rec.pid, 0); } catch (e) { if (e.code !== 'EPERM') return false; }
@@ -265,7 +260,8 @@ class Provider {
         break;
       }
       case 'mark': this.back(); list.act({ type: m.type, id: m.id }); break;
-      case 'ack': case 'dismiss': case 'restore': list.act({ type: m.type, id: m.id }); break;
+      case 'ack': case 'restore': case 'keep': list.act({ type: m.type, id: m.id }); break;
+      case 'dismiss': await this.remove(m.id); break;
       case 'toggleAway': this.setAway(!readAway().away, 'moon'); break;
       case 'toggleAll': this.toggleAll(); return;
       case 'toggleDismissed': this.showDismissed = !this.showDismissed; break;
@@ -274,6 +270,22 @@ class Provider {
         await this.onFolderMessage(m); break;
     }
     this.push();
+  }
+
+  // The X: off the list and its process stopped. A session working or waiting on you asks first.
+  async remove(id) {
+    const risk = this.list.stopRisk(id);
+    let stop = true;
+    if (risk) {
+      const row = this.list.rows(true).find(r => r.id === id);
+      const pick = await vscode.window.showWarningMessage(
+        `"${row ? row.name : id}" is ${risk === 'working' ? 'still working' : 'waiting for your answer'}. Stop it too?`,
+        { modal: true, detail: `Stopping ends its process and cuts off what it is ${risk === 'working' ? 'doing' : 'waiting for'}. The conversation is saved: bring it back from Removed and click it to wake it.` },
+        STOP_AND_REMOVE, REMOVE_ONLY);
+      if (!pick) return;
+      stop = pick === STOP_AND_REMOVE;
+    }
+    this.list.act({ type: 'dismiss', id, stop });
   }
 
   toggleAll() {
@@ -484,8 +496,9 @@ function start(host) {
   const subs = [];
   const scope = windowScope(() => (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath));
   const list = new SessionList({
-    store: context.globalState, transcripts, scope, now: () => Date.now(),
+    store: context.globalState, transcripts, procs, scope, now: () => Date.now(),
     removedClearMs: () => (cfg().get('removedClearHours') || 12) * 3600e3,
+    autoCloseMs: () => { const h = cfg().get('autoCloseHours'); return (typeof h === 'number' && h >= 0 ? h : 4) * 3600e3; },
     live: readRegistry(), ended: () => readRegistry(true),
   }, host.carried);
   // A look at the registry and the trail; plays the sounds the changes call for.

@@ -2,7 +2,7 @@
   "name": "claude-sessions-panel",
   "displayName": "Claude Sessions",
   "description": "A bottom-panel tab listing your live Claude Code sessions: running, response ready (green), needs an answer (blue). Click to focus the session. Plus a Usage view: the current usage windows of every Claude Code and Codex login on the machine.",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "publisher": "yznaig",
   "license": "MIT",
   "author": "yznaig",
@@ -162,6 +162,12 @@
           "type": "number",
           "default": 12,
           "description": "Clear a session from the Removed list this many hours after you removed it. New activity in it still brings it back."
+        },
+        "claudeSessions.autoCloseHours": {
+          "type": "number",
+          "default": 4,
+          "minimum": 0,
+          "description": "Stop a Claude Code session's process after this many hours with no activity, to free its memory. It stays on the list as asleep; click it to wake it. Never stops a session that is working, waiting for you, running a background command, or marked Keep running. 0 turns it off."
         },
         "claudeSessions.sound.enabled": {
           "type": "boolean",

@@ -28,7 +28,11 @@ const vscodeStub = {
       if (err) { current.refused.push(err); return undefined; }
       return answer;
     },
-    showWarningMessage: async (msg, ...rest) => (rest.some(x => x && x.modal) ? current.confirm : undefined),
+    showWarningMessage: async (msg, ...rest) => {
+      if (!rest.some(x => x && x.modal)) return undefined;
+      current.asked.push(msg);
+      return current.confirm;
+    },
     showErrorMessage: () => {},
     setStatusBarMessage() {},
     createQuickPick() { throw new Error('not in tests'); },
@@ -93,7 +97,9 @@ const words = n => Array.from({ length: n }, (_, i) => 'w' + i).join(' ');
 
 let counter = 0;
 const kids = new Set();
-process.on('exit', () => { for (const k of kids) { try { k.kill(); } catch { /* gone */ } } });
+// A background-command session is its own process group, so its shell child goes with it.
+const kill = k => { try { if (k.group) process.kill(-k.pid, 'SIGTERM'); else k.kill(); } catch { /* gone */ } };
+process.on('exit', () => { for (const k of kids) kill(k); });
 
 class Harness {
   constructor(opts = {}) {
@@ -104,7 +110,7 @@ class Harness {
     this.folders = opts.noFolder ? [] : [this.proj];
     this.now = opts.now || 1_800_000_000_000;
     this.config = {
-      sessionsDir: path.join(this.home, '.claude/sessions'), removedClearHours: 12,
+      sessionsDir: path.join(this.home, '.claude/sessions'), removedClearHours: 12, autoCloseHours: 4,
       'sound.enabled': true, 'sound.ready': path.join(this.home, 'ready.wav'), 'sound.waiting': path.join(this.home, 'waiting.wav'),
       focusCommand: 'claude-vscode.editor.open',
     };
@@ -112,6 +118,7 @@ class Harness {
     this.workspaceState = memento();
     this.answers = [];
     this.refused = [];
+    this.asked = [];
     this.confirm = 'Delete';
     this.sounds = [];
     this.executed = [];
@@ -124,26 +131,49 @@ class Harness {
   }
 
   id(name) { return this.prefix + name; }
+  // Long enough for a signal the panel sent to land.
+  pause(ms = 300) { return new Promise(r => setTimeout(r, ms)); }
   advance(ms) { this.now += ms; }
 
   // A running session: a real process (so the panel's liveness check passes) and its registry file.
-  session(name, { status = 'idle', cwd = this.proj, regName, transcript } = {}) {
+  // `background`: the session has a background command running (a shell child, as Claude Code starts
+  // one). `entrypoint`, `pidDomain`, `procStart` override what the registry record says.
+  session(name, { status = 'idle', cwd = this.proj, regName, transcript, background, entrypoint = 'claude-vscode', pidDomain, procStart: ps } = {}) {
     const id = this.id(name);
     if (transcript) this.transcript(name, transcript, cwd);
-    const k = realSpawn('sleep', ['600'], { stdio: 'ignore' });
+    const k = background
+      ? realSpawn('sh', ['-c', 'sh -c "sleep 600; : .claude/shell-snapshots/snapshot-bash.sh" & wait'], { stdio: 'ignore', detached: true })
+      : realSpawn('sleep', ['600'], { stdio: 'ignore' });
+    k.group = !!background;
     kids.add(k);
     this.kids.push(k);
+    const exited = new Promise(res => k.once('exit', () => { kids.delete(k); res(); }));
     const file = path.join(this.config.sessionsDir, k.pid + '.json');
-    const rec = { pid: k.pid, sessionId: id, cwd, name: regName !== undefined ? regName : name, status, startedAt: this.now, statusUpdatedAt: this.now, procStart: procStart(k.pid) };
+    const rec = {
+      pid: k.pid, sessionId: id, cwd, name: regName !== undefined ? regName : name, status, startedAt: this.now, statusUpdatedAt: this.now,
+      procStart: ps !== undefined ? ps : procStart(k.pid), entrypoint, kind: 'interactive', ...(pidDomain ? { pidDomain } : {}),
+    };
     const write = () => fs.writeFileSync(file, J(rec));
     write();
     const h = this;
     return {
-      id, rec,
+      id, rec, pid: k.pid,
       set(st, extra = {}) { Object.assign(rec, { status: st, statusUpdatedAt: h.now }, extra); write(); },
       // Ends the process and waits until it is gone, as when the session is closed.
-      end() { return new Promise(res => { k.once('exit', () => { kids.delete(k); res(); }); k.kill(); }); },
+      end() { kill(k); return exited; },
+      // Resolves once the process has gone, whoever stopped it; fails if it is still running after 3 s.
+      gone: () => Promise.race([exited, new Promise((_, no) => setTimeout(() => no(new Error(`${id} still running`)), 3000).unref())]),
+      // Read from the process table: a process the panel just stopped is gone (or a zombie) at once.
+      alive() {
+        try { return fs.readFileSync(`/proc/${k.pid}/stat`, 'utf8').slice(fs.readFileSync(`/proc/${k.pid}/stat`, 'utf8').lastIndexOf(')') + 2)[0] !== 'Z'; }
+        catch { return false; }
+      },
     };
+  }
+
+  // This machine's process domain, as Claude Code writes it in the registry.
+  get pidDomain() {
+    return `linux:${fs.readFileSync('/etc/machine-id', 'utf8').trim()}:${fs.readlinkSync('/proc/self/ns/pid')}`;
   }
 
   // A registry record left by a process that has stopped (what Claude Code leaves behind).
@@ -154,10 +184,22 @@ class Harness {
     return id;
   }
 
+  // Appends to a session's transcript, stamped with the test clock.
   transcript(name, ls, cwd = this.proj) {
     const dir = path.join(this.home, '.claude/projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'));
     fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(path.join(dir, this.id(name) + '.jsonl'), ls.join('\n') + '\n');
+    const file = path.join(dir, this.id(name) + '.jsonl');
+    fs.appendFileSync(file, ls.join('\n') + '\n');
+    fs.utimesSync(file, this.now / 1000, this.now / 1000);
+  }
+
+  // A subagent of the session writing its own transcript, stamped with the test clock.
+  subagentWrite(name, cwd = this.proj) {
+    const dir = path.join(this.home, '.claude/projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), this.id(name), 'subagents');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'agent-x.jsonl');
+    fs.appendFileSync(file, lines.text('working') + '\n');
+    fs.utimesSync(file, this.now / 1000, this.now / 1000);
   }
 
   trail(name, t) {
@@ -218,7 +260,7 @@ class Harness {
 
   async cleanup() {
     if (this.app) this.stop();
-    for (const k of this.kids) { try { k.kill(); } catch { /* gone */ } kids.delete(k); }
+    for (const k of this.kids) { kill(k); kids.delete(k); }
     current = null;
   }
 }

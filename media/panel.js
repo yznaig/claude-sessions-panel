@@ -18,6 +18,8 @@
   }
   function label(r) {
     if (r.closed) return '✓ closed';
+    if (r.stopping) return 'stopping…';
+    if (r.status === 'asleep') return r.attention === 'ready' ? 'ready · asleep' : 'asleep';
     if (r.status === 'offline') return 'not running';
     if (r.attention === 'waiting') return r.waitingFor ? 'needs you: ' + r.waitingFor : 'needs you';
     if (r.attention === 'ready') return 'response ready';
@@ -42,7 +44,7 @@
     for (const it of items) {
       if (it === '-') { menu.appendChild(el('div', 'sep')); continue; }
       if (it.heading) { menu.appendChild(el('div', 'mhead', it.heading)); continue; }
-      const b = el('button', 'mitem' + (it.current ? ' current' : ''), (it.current ? '✓ ' : '') + it.label);
+      const b = el('button', 'mitem' + (it.current ? ' current' : ''), (it.current || it.checked ? '✓ ' : '') + it.label);
       b.disabled = !!it.current;
       b.addEventListener('click', ev => { ev.stopPropagation(); closeMenu(); it.run(); });
       menu.appendChild(b);
@@ -57,11 +59,15 @@
   document.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeMenu(); });
   window.addEventListener('blur', closeMenu);
 
+  // The X removes a session from the list and, if it is running in VS Code, stops its process.
+  const removeLabel = r => (r.canStop && r.status !== 'asleep' && !r.stopping ? 'Remove from list and stop it' : 'Remove from list');
+
   function rowMenu(r, x, y) {
     const items = [{ heading: 'Move to' }, { label: 'Main', current: !r.folder, run: () => post({ type: 'move', id: r.id, folder: '' }) }];
     for (const f of state.folders) items.push({ label: f, current: r.folder === f, run: () => post({ type: 'move', id: r.id, folder: f }) });
     items.push({ label: '+ New folder…', run: () => post({ type: 'newFolder', id: r.id }) });
-    items.push('-', { label: 'Remove from list', run: () => post({ type: 'dismiss', id: r.id }) });
+    if (r.canStop) items.push('-', { label: 'Keep running (never auto-close)', checked: !!r.keep, run: () => post({ type: 'keep', id: r.id }) });
+    items.push('-', { label: removeLabel(r), run: () => post({ type: 'dismiss', id: r.id }) });
     openMenu(x, y, items);
   }
   function folderMenu(f, x, y) {
@@ -96,14 +102,16 @@
   function row(r) {
     const kind = r.closed ? 'closed' : (r.attention || r.status);
     const offline = r.status === 'offline';
-    const d = el('div', 'row ' + (r.attention || '') + (r.closed ? ' closedRow' : '') + (offline ? ' offlineRow' : '') + (r.dismissed ? ' dismissedRow' : ''));
-    d.title = r.cwd + '\n' + r.id + (offline ? '\nNot running: click to reopen' : '');
+    const asleep = r.status === 'asleep';
+    const d = el('div', 'row ' + (r.attention || '') + (r.closed ? ' closedRow' : '') + (offline ? ' offlineRow' : '') + (asleep || r.stopping ? ' asleepRow' : '') + (r.dismissed ? ' dismissedRow' : ''));
+    d.title = r.cwd + '\n' + r.id + (offline ? '\nNot running: click to reopen' : '') +
+      (asleep ? '\nAsleep: its process was stopped to free memory. Click to wake it; the conversation resumes.' : '');
     d.appendChild(el('span', 'dot ' + kind));
     d.appendChild(el('span', 'name', r.name));
     d.appendChild(el('span', 'repo', r.repo));
     // The star: mark an idle session green to come back to it, or clear the mark. Not on running
     // sessions (they turn green by themselves) or ones that need you (already blue).
-    if (!r.dismissed && !r.closed && r.status !== 'offline' && r.status !== 'busy' && r.attention !== 'waiting') {
+    if (!r.dismissed && !r.closed && !offline && !asleep && !r.stopping && r.status !== 'busy' && r.attention !== 'waiting') {
       const marked = r.attention === 'ready';
       const star = el('button', 'star', marked ? '★' : '☆');
       star.title = marked ? 'Clear the green mark' : 'Mark green to come back to it';
@@ -111,7 +119,9 @@
       d.appendChild(star);
     } else d.appendChild(el('span'));
     d.appendChild(costChip(r));
-    d.appendChild(el('span', 'state ' + kind, label(r)));
+    const st = el('span', 'state ' + (asleep && !r.attention ? 'asleep' : kind), (r.keep ? '📌 ' : '') + label(r));
+    if (r.keep) st.title = 'Keep running: never auto-closed (⋯ to change)';
+    d.appendChild(st);
     d.appendChild(el('span', 'age', age(state.now - r.since)));
     if (r.dismissed) {
       d.appendChild(el('span'));
@@ -125,7 +135,7 @@
       d.addEventListener('dragstart', ev => { ev.dataTransfer.setData(DRAG_TYPE, r.id); ev.dataTransfer.effectAllowed = 'move'; closeMenu(); });
     }
     const x = el('button', 'x', r.dismissed ? '↩' : '✕');
-    x.title = r.dismissed ? 'Bring back' : 'Remove from list';
+    x.title = r.dismissed ? 'Bring back' : removeLabel(r);
     x.addEventListener('click', ev => { ev.stopPropagation(); post({ type: r.dismissed ? 'restore' : 'dismiss', id: r.id }); });
     d.appendChild(x);
     d.addEventListener('click', () => post({ type: 'focus', id: r.id }));

@@ -10,7 +10,8 @@ A VS Code panel tab (next to Terminal) that lists your live Claude Code sessions
 - **Badge** on the panel tab counts sessions that need you, so it shows even when the panel is collapsed.
 - **Sound** on each green and blue transition. Default green is VS Code's success sound, default blue is VS Code's "chat needs your action" sound. **Claude Sessions: Pick Ready Sound** / **Pick Waiting Sound** preview the bundled set as you arrow through it; any `.wav` path works too, so you can drop in your own editor's chime.
 - **Click a row** to focus that session. It opens where Claude Code's *Preferred Location* setting (`claudeCode.preferredLocation`) says: set it to `sidebar` and sessions open in the chat sidebar, except one that already has its own tab, which is revealed.
-- **✕** removes a session you're done with. **Removed (n)** shows them; **↩** brings one back. Any new activity in a removed session brings it back on its own. The Removed list is cleared when VS Code restarts, and each removed session leaves it 12 hours after you removed it (setting `claudeSessions.removedClearHours`).
+- **✕** removes a session you're done with and stops its process (Claude Code's VS Code extension leaves a session's process running after you switch away from it or archive it: 200–400 MB each, plus its MCP helpers). If the session is working or waiting for your answer, it asks first: stop and remove, or remove and leave it running. Terminal sessions are only removed, never stopped. **Removed (n)** shows them; **↩** brings one back. Any new activity in a removed session brings it back on its own. The Removed list is cleared when VS Code restarts, and each removed session leaves it 12 hours after you removed it (setting `claudeSessions.removedClearHours`).
+- **Asleep sessions.** A session quiet for 4 hours has its process stopped, but stays exactly where it is on the list, dimmed and marked **asleep**; a reply you hadn't read stays green, with its time chip. Click it to wake it: Claude Code resumes the conversation in a new process (if its tab is still open, the tab shows "process exited with code 143" until you type, then carries on). Never stopped: a session that is working, waiting for you, on screen in some window, running a background command or subagent, or marked **Keep running** (⋯ menu, shown as 📌; for sessions you're watching, like a runner watcher). The hours are the setting `claudeSessions.autoCloseHours`; 0 turns it off. Before stopping anything the panel checks the process is still that session's (its start time matches the registry) and on this machine.
 - **The list survives a restart.** Sessions listed when VS Code closes come back as dim **not running** rows; click one to reopen it, and it turns back into a live row. A session you end while VS Code keeps running leaves the list as before.
 - **Alt+Q** jumps back to the session you looked at before this one. Keep pressing to walk further back; **Alt+Shift+Q** walks forward again. Switching to a session yourself starts a fresh walk from there. It needs the companion mod below.
 - **Alt+A** asks an aside about whatever you highlighted in a Claude reply: select the text, press Alt+A, and the session on screen opens a side question on it above its prompt box, answered from a fork of the conversation. Your clipboard is left as it was. It needs the `side-fork` mod in the session as well as the companion mod below.
@@ -42,7 +43,8 @@ Focusing a session calls the Claude Code extension's own `claude-vscode.editor.o
 |---|---|
 | `extension.js` | The loader: registers the views and Reload Panel, starts the newest installed `core.js`. |
 | `core.js` | The VS Code side: reads the registry and trail, plays sounds, the webview, commands, Alt+Q, Alt+A, the snapshot. |
-| `sessions.js` | Which sessions are listed and how each stands: ready, needs you, removed, filed, saved for the restart. No VS Code, no files; everything comes in through its constructor. |
+| `sessions.js` | Which sessions are listed and how each stands: ready, needs you, removed, filed, asleep, saved for the restart; and when to stop one. No VS Code, no files; everything comes in through its constructor. |
+| `procs.js` | Session processes: is a pid still the session's, stop it, is it running a background command (Linux `/proc`). |
 | `transcript.js` | Reading transcripts: titles, "Good to close", the waiting reply and its time estimate. |
 | `window.js` | Which sessions belong to this window. |
 | `away.js` | The moon's file: read and write `away.json`. |
@@ -51,7 +53,7 @@ Focusing a session calls the Claude Code extension's own `claude-vscode.editor.o
 
 ### Tests
 
-`npm test` runs `test/panel.test.js`: about 40 checks that drive the real code the way VS Code and the panel do (fake VS Code, stand-in session processes, real transcript files, a clock moved by hand) and check what the panel shows. Under a second; Linux or WSL, since session liveness is read from `/proc`.
+`npm test` runs `test/panel.test.js`: about 60 checks that drive the real code the way VS Code and the panel do (fake VS Code, stand-in session processes, real transcript files, a clock moved by hand) and check what the panel shows. Under a second; Linux or WSL, since session liveness is read from `/proc`.
 
 ## Install (from source)
 
@@ -91,6 +93,7 @@ It lists what it found, reads them (whole for a few, start and end for more, wit
 |---|---|---|
 | `claudeSessions.sessionsDir` | `~/.claude/sessions` | Registry folder |
 | `claudeSessions.removedClearHours` | 12 | Clear removed sessions from the Removed list this many hours after removal |
+| `claudeSessions.autoCloseHours` | 4 | Stop a session's process after this many hours with no activity (it stays listed, asleep); 0 = off |
 | `claudeSessions.sound.enabled` | true | Play sounds |
 | `claudeSessions.sound.ready` | `success` | Green sound: bundled name or `.wav` path |
 | `claudeSessions.sound.waiting` | `chatUserActionRequired` | Blue sound: bundled name or `.wav` path |

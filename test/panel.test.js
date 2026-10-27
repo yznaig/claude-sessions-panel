@@ -135,8 +135,10 @@ withHarness('remove and bring back', async h => {
 });
 
 withHarness('a removed session comes back on new activity, even after it left the Removed list', async h => {
-  const a = h.session('a'); const b = h.session('b'); const c = h.session('c', { status: 'busy' });
+  // Terminal sessions and a working one kept running: the X leaves them running.
+  const a = h.session('a', { entrypoint: 'cli' }); const b = h.session('b', { entrypoint: 'cli' }); const c = h.session('c', { status: 'busy' });
   h.start();
+  h.confirm = 'Remove, keep it running';
   for (const s of [a, b, c]) await h.send({ type: 'dismiss', id: s.id });
   h.step(13 * H);
   eq(h.row('a'), undefined, 'cleared from Removed after 12 hours');
@@ -155,7 +157,7 @@ withHarness('Removed clears after the configured hours', async h => {
 // ---- restart, reload, ending -------------------------------------------------
 
 withHarness('restart: listed sessions come back, stopped ones as not running; Removed keeps only running ones', async h => {
-  h.session('a'); const s = h.session('s'); const d = h.session('d'); const x = h.session('x');
+  h.session('a'); const s = h.session('s'); const d = h.session('d', { entrypoint: 'cli' }); const x = h.session('x');
   h.start();
   await h.send({ type: 'dismiss', id: d.id }); await h.send({ type: 'dismiss', id: x.id });
   h.stop(); await s.end(); await x.end(); h.start();
@@ -232,11 +234,12 @@ withHarness('Good to close: shown as closed, no green, no sound', h => {
   eq(h.row('c').closed, true); eq(h.row('c').attention, null); same(h.takeSounds(), []);
 });
 
-withHarness('Good to close without the trail mod: moves to Removed two minutes later', h => {
-  h.session('c', { transcript: closing(h) });
+withHarness('Good to close without the trail mod: moves to Removed two minutes later, and stops', async h => {
+  const c = h.session('c', { transcript: closing(h) });
   h.start();
-  h.step(60e3); eq(h.row('c').dismissed, false);
+  h.step(60e3); await h.pause(); eq(h.row('c').dismissed, false); assert.ok(c.alive());
   h.step(70e3); eq(h.row('c').dismissed, true);
+  await c.gone(); h.step(); eq(h.row('c').status, 'asleep');
 });
 
 withHarness('Good to close: moves to Removed once VS Code hides it', h => {
@@ -458,4 +461,145 @@ withHarness("moon: set in another window, it shows here on the next update", asy
   require('fs').writeFileSync(awayFile(h), JSON.stringify({ away: true, since: 123 }));
   h.step();
   same(h.state.away, { away: true, since: 123 });
+});
+
+// ---- stopping sessions: the X and auto-close ---------------------------------
+
+withHarness('X: removes an idle session and stops it, without asking; it comes back asleep', async h => {
+  const a = h.session('a');
+  h.start();
+  await h.send({ type: 'dismiss', id: a.id });
+  same(h.asked, []);
+  await a.gone(); h.step();
+  eq(h.row('a').dismissed, true); eq(h.row('a').status, 'asleep');
+  await h.send({ type: 'restore', id: a.id });
+  eq(h.row('a').dismissed, false); eq(h.row('a').status, 'asleep'); same(h.order(), ['a']);
+  h.step(31e3); eq(h.row('a').status, 'asleep', 'stays listed, unlike a session that ended by itself');
+});
+
+withHarness('X: a working or waiting session asks first; cancel, keep running, or stop', async h => {
+  const b = h.session('b', { status: 'busy' }); const w = h.session('w', { status: 'waiting' }); const k = h.session('k', { status: 'busy' });
+  h.start();
+  h.confirm = undefined; await h.send({ type: 'dismiss', id: b.id });
+  eq(h.asked.length, 1); eq(h.row('b').dismissed, false);
+  h.confirm = 'Remove, keep it running'; await h.send({ type: 'dismiss', id: k.id });
+  eq(h.row('k').dismissed, true);
+  h.confirm = 'Stop and remove'; await h.send({ type: 'dismiss', id: w.id });
+  await w.gone(); h.step(); await h.pause();
+  eq(h.row('w').dismissed, true); eq(h.row('w').status, 'asleep');
+  assert.ok(b.alive()); assert.ok(k.alive());
+});
+
+withHarness('X: a terminal session is removed but left running', async h => {
+  const t = h.session('t', { entrypoint: 'cli' });
+  h.start(); await h.send({ type: 'dismiss', id: t.id }); h.step(); await h.pause();
+  assert.ok(t.alive()); eq(h.row('t').dismissed, true); eq(h.row('t').status, 'idle');
+});
+
+withHarness('auto-close: a session quiet for 4 hours is stopped and stays where it is', async h => {
+  const a = h.session('a'); const b = h.session('b'); const f = h.session('f'); h.session('w', { status: 'waiting' });
+  h.start();
+  h.answers.push('Later'); await h.send({ type: 'newFolder', id: f.id });
+  h.step(3.9 * H); await h.pause(); assert.ok(a.alive());
+  h.transcript('b', [L.user('still here')]);
+  h.step(0.2 * H);
+  await a.gone(); await f.gone(); h.step();
+  eq(h.row('a').status, 'asleep'); eq(h.row('a').dismissed, false);
+  eq(h.row('f').status, 'asleep'); eq(h.row('f').folder, 'Later');
+  assert.ok(b.alive()); eq(h.row('b').status, 'idle');
+  h.step(31e3); h.restart();
+  eq(h.row('a').status, 'asleep'); eq(h.row('f').status, 'asleep'); eq(h.row('f').folder, 'Later');
+});
+
+withHarness('auto-close never stops a session working, needing you, kept running, with a background command or subagent, or in a terminal', async h => {
+  const b = h.session('b', { status: 'busy' }); const w = h.session('w', { status: 'waiting' }); const k = h.session('k');
+  const bg = h.session('bg', { background: true }); const sub = h.session('sub', { transcript: [L.user('start a background agent')] }); const t = h.session('t', { entrypoint: 'cli' });
+  h.start();
+  await h.send({ type: 'keep', id: k.id });
+  eq(h.row('k').keep, true); eq(h.row('b').keep, false);
+  for (let i = 0; i < 6; i++) { h.subagentWrite('sub'); h.step(H); }
+  await h.pause();
+  for (const s of [b, w, k, bg, sub, t]) assert.ok(s.alive(), s.id);
+  h.restart(); eq(h.row('k').keep, true, 'the mark is saved');
+  await h.send({ type: 'keep', id: k.id }); eq(h.row('k').keep, false);
+  h.step(); await k.gone(); h.step();
+  eq(h.row('k').status, 'asleep');
+});
+
+withHarness('auto-close: 0 hours turns it off', async h => {
+  h.config.autoCloseHours = 0;
+  const a = h.session('a');
+  h.start(); h.step(10 * H); await h.pause();
+  assert.ok(a.alive()); eq(h.row('a').status, 'idle');
+});
+
+withHarness("only this machine's sessions are stopped", async h => {
+  const far = h.session('far', { pidDomain: 'linux:0000:pid:[1]' }); const near = h.session('near', { pidDomain: h.pidDomain });
+  h.start(); h.step(5 * H);
+  await near.gone(); h.step();
+  eq(h.row('near').status, 'asleep'); assert.ok(far.alive());
+  await h.send({ type: 'dismiss', id: far.id }); h.step(); await h.pause();
+  assert.ok(far.alive()); eq(h.row('far').dismissed, true);
+});
+
+withHarness('X on a not-running session leaves alone whatever process now has its old pid', async h => {
+  const other = h.session('other', { entrypoint: 'cli' });
+  const id = h.id('old');
+  require('fs').writeFileSync(require('path').join(h.config.sessionsDir, 'old.json'),
+    JSON.stringify({ pid: other.pid, sessionId: id, cwd: h.proj, name: 'old', status: 'idle', startedAt: h.now, procStart: '1', entrypoint: 'claude-vscode' }));
+  h.globalState.update(OPEN_KEY, [{ id, cwd: h.proj, name: 'old', since: h.now, startedAt: h.now }]);
+  h.start(); eq(h.row('old').status, 'offline');
+  await h.send({ type: 'dismiss', id }); h.step(5 * H); await h.pause();
+  assert.ok(other.alive());
+});
+
+withHarness('an unread reply keeps its green mark and time while asleep; waking clears it', async h => {
+  const a = h.session('a', { status: 'busy', transcript: [L.user('go'), L.text(words(460))] });
+  h.start(); a.set('idle'); h.step(); h.takeSounds();
+  h.step(4.1 * H); await a.gone(); h.step();
+  eq(h.row('a').status, 'asleep'); eq(h.row('a').attention, 'ready'); eq(h.row('a').cost.words, 460); eq(h.badge, 1);
+  same(h.takeSounds(), []);
+  h.restart(); eq(h.row('a').attention, 'ready');
+  await h.send({ type: 'focus', id: a.id });
+  eq(h.executed.at(-1)[1], a.id); eq(h.row('a').attention, null);
+});
+
+withHarness('waking: clicking an asleep session reopens it, and its new process makes it live again', async h => {
+  const a = h.session('a');
+  h.start(); h.step(4.1 * H); await a.gone(); h.step();
+  await h.send({ type: 'focus', id: a.id });
+  eq(h.executed.at(-1)[0], 'claude-vscode.editor.open'); eq(h.executed.at(-1)[1], a.id);
+  const again = h.session('a'); h.step();
+  eq(h.row('a').status, 'idle'); eq(h.row('a').stopping, false); eq(h.rows.filter(r => r.id === a.id).length, 1);
+  h.step(31e3); eq(h.row('a').status, 'idle', 'not stopped again straight away');
+  await again.end(); h.step(); h.step(31e3);
+  eq(h.row('a'), undefined, 'awake, it is an ordinary session again: ended on purpose, it leaves');
+});
+
+withHarness('snapshot: asleep sessions say so', async h => {
+  const a = h.session('a');
+  h.start(); h.step(4.1 * H); await a.gone(); h.step();
+  eq(h.snapshot().rows.find(r => r.id === a.id).state, 'asleep');
+});
+
+withHarness('stop checks the pid is still the session: a reused pid is left alone', async h => {
+  const other = h.session('other');
+  const procs = require('../procs');
+  eq(procs.stop({ ...other.rec, procStart: '1' }), false);
+  eq(procs.stop({ ...other.rec, pidDomain: 'linux:0000:pid:[1]' }), false);
+  assert.ok(other.alive());
+  eq(procs.stop(other.rec), true);
+  await other.gone();
+});
+
+withHarness('auto-close skips a session on screen; once hidden, it counts from then', async h => {
+  const t = h.now;
+  const a = h.session('a');
+  h.trail('a', { shown: true, shownAt: t });
+  h.start(); h.step(5 * H); await h.pause();
+  assert.ok(a.alive(), 'on screen: stopping it would put an error banner in front of you');
+  h.trail('a', { shown: false, shownAt: t, hiddenAt: h.now }); h.step(3 * H); await h.pause();
+  assert.ok(a.alive());
+  h.step(1.1 * H); await a.gone(); h.step();
+  eq(h.row('a').status, 'asleep');
 });

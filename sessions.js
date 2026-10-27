@@ -1,16 +1,22 @@
 // The session list: which Claude sessions the panel lists, and how each one stands (running,
-// ready, needs you, closed, removed, filed in a folder, not running since a restart).
+// ready, needs you, closed, removed, filed in a folder, asleep, not running since a restart).
 //
-//   const list = new SessionList({ store, transcripts, scope, now, removedClearMs, live, ended }, carried)
-//   list.observe(registry, trail) -> sounds to play ('ready' | 'waiting')
-//   list.act({ type, id, folder, name, to })   ack | mark | dismiss | restore | move | addFolder | renameFolder | deleteFolder
+//   const list = new SessionList({ store, transcripts, procs, scope, now, removedClearMs, autoCloseMs, live, ended }, carried)
+//   list.observe(registry, trail) -> sounds to play ('ready' | 'waiting'); also stops sessions quiet for autoCloseMs
+//   list.act({ type, id, folder, name, to, stop })   ack | mark | keep | dismiss | restore | move | addFolder | renameFolder | deleteFolder
+//   list.stopRisk(id) -> 'working' | 'waiting' | null: what removing it with stop would cut off
 //   list.rows(showAll) -> the rows to show, in order
 //   list.handOver() -> what a Reload Panel passes to the next copy as `carried`
 //
 // It touches no VS Code and no files itself. `store` is VS Code's globalState (get/update, shared by
-// every window); `transcripts` reads Claude Code's transcripts (transcript.js); `scope` says which
-// sessions are this window's (window.js); `now` is the clock. Each saved concern has one owner below:
-// Removed, Saved (the list that survives a restart), Folders, and the auto-closed record.
+// every window); `transcripts` reads Claude Code's transcripts (transcript.js); `procs` checks and
+// stops session processes (procs.js); `scope` says which sessions are this window's (window.js); `now`
+// is the clock. Each saved concern has one owner below: Removed, Saved (the list that survives a
+// restart), Folders, Asleep (sessions the panel stopped), Kept (never auto-close), and the
+// auto-closed record.
+//
+// Stopping only ends a session's process, never its place: the panel controls what is listed,
+// stopping controls what is running. An asleep session wakes when clicked (Claude Code resumes it).
 'use strict';
 const path = require('path');
 
@@ -19,6 +25,8 @@ const KEYS = {
   autoClosed: 'claudeSessions.autoClosed',
   saved: 'claudeSessions.open',
   folders: 'claudeSessions.folders',
+  asleep: 'claudeSessions.asleep',
+  kept: 'claudeSessions.keepRunning',
 };
 // A session of this window's folder that stops while VS Code keeps running was ended on purpose and
 // leaves the saved list after this long; when VS Code itself closes, the panel is gone well before.
@@ -29,6 +37,12 @@ const NO_TRAIL_CLOSE_MS = 2 * 60e3;
 const UPGRADE_WINDOW_MS = 12 * 3600e3;
 // A filed session's saved copy is rewritten when its title or folder changes, or it is this stale.
 const FILED_COPY_STALE_MS = 10 * 60e3;
+// A stopped session's process normally goes within seconds; one still there after this is taken as
+// not stopped (it is tried again the next time it qualifies).
+const STOP_GRACE_MS = 60e3;
+// Only sessions of Claude Code's VS Code extension are stopped: they wake by a click. A terminal
+// session would not come back where it was.
+const STOPPABLE_ENTRYPOINT = 'claude-vscode';
 
 const byId = (a, b) => (a.id < b.id ? -1 : 1);
 
@@ -59,9 +73,10 @@ class Removed {
 // of this window stays listed until removed, closed, or ended while VS Code ran; another window's
 // stopped sessions follow that window's saved copy.
 class Saved {
-  constructor(store, scope, carried, upgrade) {
+  constructor(store, scope, carried, upgrade, isAsleep) {
     this.store = store;
     this.scope = scope;
+    this.isAsleep = isAsleep;
     this.known = new Map(carried ? carried.known : []);   // id -> { id, cwd, name, since, startedAt }
     this.ranHere = new Set(carried ? carried.liveThisRun : []); // seen running since VS Code started
     this.goneAt = new Map(carried ? carried.goneAt : []);  // id -> when this window's session was first seen stopped
@@ -72,7 +87,8 @@ class Saved {
   }
   entry(id) { return this.known.get(id); }
   // Stopped while this window kept running: ended on purpose, so not shown as "not running".
-  endedHere(id, cwd, liveIds) { return this.ranHere.has(id) && !liveIds.has(id) && this.scope.owns(cwd); }
+  // Not when the panel put it to sleep: that keeps its place.
+  endedHere(id, cwd, liveIds) { return this.ranHere.has(id) && !liveIds.has(id) && this.scope.owns(cwd) && !this.isAsleep(id); }
 
   // Rebuild after a look at the registry. `live`: [{ entry, keep }] for each running session.
   rebuild({ live, liveIds, isRemoved, isClosed, now }) {
@@ -183,15 +199,56 @@ class Folders {
   }
 }
 
+// ---- Asleep: sessions whose process the panel stopped ----------------------------------------
+// Saved as [id, { pid, at, ready }]: the process it stopped, when, and whether a reply was waiting
+// to be read (it stays green while asleep). Shared by every window, so read fresh before each use.
+class Asleep {
+  constructor(store) { this.store = store; this.load(); }
+  load() {
+    const s = this.store.get(KEYS.asleep, []);
+    this.map = new Map((Array.isArray(s) ? s : []).filter(x => Array.isArray(x) && x[1] && x[1].pid));
+  }
+  get(id) { return this.map.get(id); }
+  has(id) { return this.map.has(id); }
+  add(id, rec) { this.load(); this.map.set(id, rec); this.save(); }
+  clearReady(id) { this.load(); const a = this.map.get(id); if (a && a.ready) { a.ready = false; this.save(); } }
+  // Let go of sessions running again (a new process), stops that did not take, and sessions no
+  // list holds any more (`held`).
+  tidy(regs, now, held) {
+    this.load();
+    const live = new Map(regs.map(r => [r.sessionId, r]));
+    let changed = false;
+    for (const [id, a] of [...this.map]) {
+      const r = live.get(id);
+      if (r ? r.pid !== a.pid || now - a.at > STOP_GRACE_MS : !held(id)) { this.map.delete(id); changed = true; }
+    }
+    if (changed) this.save();
+  }
+  save() { void this.store.update(KEYS.asleep, [...this.map].slice(-500)); }
+}
+
+// ---- Kept: sessions marked "keep running", never auto-closed ----------------------------------
+class Kept {
+  constructor(store) { this.store = store; }
+  ids() { return new Set(this.store.get(KEYS.kept, [])); }
+  toggle(id) {
+    const s = this.ids();
+    if (!s.delete(id)) s.add(id);
+    void this.store.update(KEYS.kept, [...s].slice(-300));
+  }
+}
+
 // ---- the list ---------------------------------------------------------------------------------
 
 class SessionList {
-  constructor({ store, transcripts, scope, now, removedClearMs, live, ended }, carried) {
+  constructor({ store, transcripts, procs, scope, now, removedClearMs, autoCloseMs, live, ended }, carried) {
     this.store = store;
     this.transcripts = transcripts;
+    this.procs = procs;
     this.scope = scope;
     this.now = now;
     this.removedClearMs = removedClearMs;
+    this.autoCloseMs = autoCloseMs;
     this.firstLoad = !carried;
     this.prevStatus = new Map(carried ? carried.prevStatus : []); // id -> last seen status
     this.attention = new Map(carried ? carried.attention : []);   // id -> 'ready' | 'waiting'
@@ -209,7 +266,9 @@ class SessionList {
       return ended().map(r => this.entryOf(r, at))
         .filter(e => !old.has(e.id) && at - e.since <= UPGRADE_WINDOW_MS && !this.closedAt(e.id, e.cwd));
     };
-    this.saved = new Saved(store, scope, carried, upgrade);
+    this.asleep = new Asleep(store);
+    this.kept = new Kept(store);
+    this.saved = new Saved(store, scope, carried, upgrade, id => this.asleep.has(id));
     this.folders = new Folders(store);
   }
 
@@ -261,7 +320,7 @@ class SessionList {
           const leftIt = shown
             ? (!shown.shown && shown.hiddenAt >= t.closedAt) || lastShownIn(r.cwd) > Math.max(t.closedAt, shown.shownAt)
             : now - t.closedAt > NO_TRAIL_CLOSE_MS;
-          if (leftIt) { this.dismiss(id); this.markAutoClosed(key); }
+          if (leftIt) { this.dismiss(id); this.stop(r); this.markAutoClosed(key); }
         }
         continue;
       }
@@ -294,7 +353,54 @@ class SessionList {
     }));
     this.saved.rebuild({ live, liveIds: this.liveIds, isRemoved: id => this.removed.has(id), isClosed, now });
     this.folders.track(live.map(x => x.entry), this.liveIds, isClosed);
+    this.asleep.tidy(regs, now, id => this.saved.listed.has(id) || !!this.folders.of(id) || this.removed.has(id));
+    this.autoClose(trail, now);
     return sounds;
+  }
+
+  // ---- stopping ----
+  stoppable(r) { return r.entrypoint === STOPPABLE_ENTRYPOINT && this.procs.isHere(r); }
+  reg(id) { return this.regs.find(r => r.sessionId === id); }
+
+  // Ends a session's process (procs.stop checks the pid is still that session's). It stays wherever
+  // it is listed, as asleep.
+  stop(r) {
+    if (!r || !this.stoppable(r)) return false;
+    const a = this.asleep.get(r.sessionId);
+    if (a && a.pid === r.pid) return true; // already on its way out
+    if (!this.procs.stop(r)) return false;
+    this.asleep.add(r.sessionId, { pid: r.pid, at: this.now(), ready: this.attention.get(r.sessionId) === 'ready' });
+    return true;
+  }
+
+  stopRisk(id) {
+    const r = this.reg(id);
+    if (!r || !this.stoppable(r)) return null;
+    if ((r.status || 'idle') === 'busy') return 'working';
+    if (r.status === 'waiting' || this.attention.get(id) === 'waiting') return 'waiting';
+    return null;
+  }
+
+  // Stops sessions with nothing going on for autoCloseMs: not working, not waiting on you, not kept
+  // running, not on screen, no background command, nothing written by them or a subagent, not shown
+  // or hidden.
+  autoClose(trail, now) {
+    const ms = this.autoCloseMs();
+    if (!(ms > 0)) return;
+    const kept = this.kept.ids();
+    for (const r of this.regs) {
+      const id = r.sessionId;
+      if ((r.status || 'idle') !== 'idle' || this.attention.get(id) === 'waiting') continue;
+      if (kept.has(id) || this.asleep.has(id) || !this.stoppable(r)) continue;
+      const t = trail.get(id);
+      // On screen in some window: Claude Code would show an error banner in its place.
+      if (t && t.shown) continue;
+      const last = Math.max(r.statusUpdatedAt || 0, r.updatedAt || 0, r.startedAt || 0,
+        this.transcripts.lastWrite(r), t ? Math.max(t.shownAt || 0, t.hiddenAt || 0) : 0);
+      if (now - last < ms) continue;
+      if (this.procs.hasBackgroundCommand(r.pid)) continue;
+      this.stop(r);
+    }
   }
 
   markAutoClosed(key) {
@@ -321,7 +427,8 @@ class SessionList {
 
   act(a) {
     switch (a.type) {
-      case 'ack': this.attention.delete(a.id); break;
+      case 'ack': this.attention.delete(a.id); this.asleep.clearReady(a.id); break;
+      case 'keep': this.kept.toggle(a.id); break;
       // The star: mark an idle running session green to come back to it, or clear that mark.
       case 'mark': {
         if (!this.liveIds.has(a.id)) break;
@@ -332,7 +439,8 @@ class SessionList {
         else if (!now) this.attention.set(a.id, 'ready');
         break;
       }
-      case 'dismiss': this.dismiss(a.id); break;
+      // The X: off the list, and with `stop` its process ended too.
+      case 'dismiss': this.dismiss(a.id); if (a.stop) this.stop(this.reg(a.id)); break;
       case 'restore': this.restore(a.id); break;
       case 'move': {
         if (a.folder) {
@@ -351,11 +459,17 @@ class SessionList {
     }
   }
 
-  offlineRow(e, dismissed) {
+  // A stopped session: asleep if the panel stopped it (green still if its reply is unread), else
+  // not running.
+  offlineRow(e, dismissed, kept) {
+    const a = this.asleep.get(e.id);
+    const attention = a && a.ready && !dismissed ? 'ready' : null;
     return {
       id: e.id, pid: null, name: this.transcripts.displayName({ sessionId: e.id, cwd: e.cwd, name: e.name }), cwd: e.cwd,
-      repo: path.basename(e.cwd) || '?', status: 'offline', attention: null, dismissed,
+      repo: path.basename(e.cwd) || '?', status: a ? 'asleep' : 'offline', attention, dismissed,
       waitingFor: '', since: e.since, startedAt: e.startedAt || e.since, closed: false, folder: this.folders.of(e.id),
+      keep: kept.has(e.id), stopping: false, canStop: !!a,
+      cost: attention ? this.transcripts.replyCost(this.transcripts.readTranscript({ sessionId: e.id, cwd: e.cwd }).reply) : null,
     };
   }
 
@@ -363,6 +477,8 @@ class SessionList {
     const now = this.now();
     const clearMs = this.removedClearMs();
     const shown = cwd => showAll || this.scope.shows(cwd);
+    const kept = this.kept.ids();
+    this.asleep.load();
     const rows = [];
     // Stopped sessions: on the saved list or in Removed.
     for (const e of this.saved.known.values()) {
@@ -371,7 +487,7 @@ class SessionList {
       if (!dismissed && !this.saved.listed.has(e.id)) continue;
       if (dismissed && this.removed.expired(e.id, now, clearMs)) continue;
       if (!shown(e.cwd)) continue;
-      rows.push(this.offlineRow(e, dismissed));
+      rows.push(this.offlineRow(e, dismissed, kept));
     }
     // Running sessions.
     for (const r of this.regs) {
@@ -389,6 +505,7 @@ class SessionList {
         waitingFor: r.waitingFor || '', since, startedAt: r.startedAt || since,
         closed: status === 'idle' && t.closed, folder: this.folders.of(id),
         cost: attention === 'ready' ? this.transcripts.replyCost(t.reply) : null,
+        keep: kept.has(id), stopping: !!(this.asleep.get(id) && this.asleep.get(id).pid === r.pid), canStop: this.stoppable(r),
       });
     }
     // Filed sessions no list above holds (ended here, or another window's): shown from the folder's copy.
@@ -396,7 +513,7 @@ class SessionList {
     for (const [id, f] of this.folders.filed) {
       if (listed.has(id) || this.liveIds.has(id) || this.removed.has(id)) continue;
       if (!shown(f.entry.cwd)) continue;
-      rows.push(this.offlineRow(f.entry, false));
+      rows.push(this.offlineRow(f.entry, false, kept));
     }
     const rank = x => (x.attention === 'waiting' ? 0 : x.attention === 'ready' ? 1 : x.status === 'busy' ? 2 : x.closed ? 4 : 3);
     // Ready sessions: the one that takes least of your time first.

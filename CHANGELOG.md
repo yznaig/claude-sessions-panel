@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.16.0 — 2026-10-27
+**Sessions stop when you're done with them.** The ✕ now also stops the session's process, asking first if it is working or waiting for you. A session quiet for 4 hours (setting `claudeSessions.autoCloseHours`, 0 = off) is stopped too but stays where it is on the list, dimmed as **asleep**, still green if its reply is unread; click it to wake it. Never stopped: sessions working, waiting for you, on screen, running a background command or subagent, in a terminal, or marked **Keep running** (⋯ menu, 📌). Every stop first checks the pid is still the session's and on this machine. A "Good to close" session moving to Removed is stopped as well.
+
 ## 0.15.0 — 2026-10-26
 A **🌙 moon** in the top bar marks you away (a long stretch or overnight). It writes `~/.claude/sessions-panel/away.json` with the time it went on, for other sessions to read; click it again, or click any session or star in the panel, to mark yourself back.
 

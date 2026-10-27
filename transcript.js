@@ -128,9 +128,22 @@ function readTranscript(rec) {
   return entry;
 }
 
+// When the session last wrote anything: its transcript, or a subagent's (<id>/subagents/), which
+// keeps writing while the session itself sits idle. 0 when there is no transcript.
+function lastWrite(rec) {
+  const entry = readTranscript(rec);
+  if (!entry.file) return 0;
+  let latest = 0;
+  const mtime = f => { try { latest = Math.max(latest, fs.statSync(f).mtimeMs); } catch { /* gone */ } };
+  mtime(entry.file);
+  const subs = path.join(path.dirname(entry.file), String(rec.sessionId), 'subagents');
+  try { for (const f of fs.readdirSync(subs)) mtime(path.join(subs, f)); } catch { /* none */ }
+  return latest;
+}
+
 function displayName(rec) {
   const t = readTranscript(rec);
   return t.custom || t.ai || rec.name || String(rec.sessionId).slice(0, 8);
 }
 
-module.exports = { readTranscript, displayName, replyCost };
+module.exports = { readTranscript, displayName, replyCost, lastWrite };
