@@ -59,7 +59,7 @@ Sessions pick it up when they start, or after `/reload-plugins`.
 
 The companion plugin below also carries the **read-sessions** skill. In any Claude session, say things like:
 
-- "read the sessions in my panel for context": the rows this window's panel shows;
+- "read the sessions in my panel for context": the rows on this window's Main tab (sessions parked in folders are left out; name a folder, or say "including the parked ones", to read those);
 - "look at my recent sessions on the billing page": the last 7 days, ranked by topic;
 - "dig through all the sessions that touched the auth flow": every session on the machine, ranked by topic and by the files they edited.
 

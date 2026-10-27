@@ -291,7 +291,16 @@ def cmd_panel(a, live):
         return 1
     by_id = {s['id']: s for s in index()}
     rows = []
+    # Sessions the user filed in a panel folder are parked for later: left out unless asked for.
+    parked = {}
     for p in sn.get('rows', []):
+        f = p.get('folder') or ''
+        if a.folder:
+            if f not in a.folder:
+                continue
+        elif f and not a.all_folders:
+            parked[f] = parked.get(f, 0) + 1
+            continue
         s = by_id.get(p['id'])
         r = row(s, live) if s else {'id': p['id'], 'title': p.get('name', ''), 'cwd': p.get('cwd', ''), 'start': None, 'end': None,
                                     'turns': 0, 'state': 'no transcript', 'path': '', 'first': '', 'last': ''}
@@ -301,6 +310,9 @@ def cmd_panel(a, live):
     age = int((time.time() * 1000 - sn.get('updatedAt', 0)) / 60000)
     head = f"Panel ({', '.join(os.path.basename(f) for f in sn.get('folders') or []) or 'no folder'}"
     head += f"{', all windows' if sn.get('showAll') else ''}; list last changed {age} min ago): {len(rows)} sessions"
+    if parked:
+        head += '\nLeft out, parked in folders: ' + ', '.join(f'{f} ({n})' for f, n in parked.items())
+        head += '. --folder NAME reads one folder; --all-folders adds them all.'
     show(rows, a.json, head)
     return 0
 
@@ -378,6 +390,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
     p = sub.add_parser('panel'); p.add_argument('--cwd', default=os.getcwd())
+    p.add_argument('--folder', action='append', help='only the sessions in this panel folder (repeatable)')
+    p.add_argument('--all-folders', action='store_true', help='include every panel folder, not only Main')
     for name in ('recent', 'all'):
         p = sub.add_parser(name)
         p.add_argument('--topic', default='')
