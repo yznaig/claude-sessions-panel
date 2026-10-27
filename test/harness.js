@@ -98,7 +98,7 @@ const words = n => Array.from({ length: n }, (_, i) => 'w' + i).join(' ');
 let counter = 0;
 const kids = new Set();
 // A background-command session is its own process group, so its shell child goes with it.
-const kill = k => { try { if (k.group) process.kill(-k.pid, 'SIGTERM'); else k.kill(); } catch { /* gone */ } };
+const kill = k => { try { if (k.group) process.kill(-k.pid, 'SIGKILL'); else k.kill(); } catch { /* gone */ } };
 process.on('exit', () => { for (const k of kids) kill(k); });
 
 class Harness {
@@ -107,6 +107,11 @@ class Harness {
     this.proj = path.join(this.home, 'proj');
     this.other = path.join(this.home, 'elsewhere');
     for (const d of ['.claude/sessions', '.claude/projects', 'proj', 'elsewhere']) fs.mkdirSync(path.join(this.home, d), { recursive: true });
+    // The session-trail mod at work (some session was shown once), unless the test says it isn't installed.
+    if (!opts.noTrail) {
+      fs.mkdirSync(path.join(this.home, '.claude/session-trail'), { recursive: true });
+      fs.writeFileSync(path.join(this.home, '.claude/session-trail/long-gone.json'), J({ sessionId: 'long-gone', cwd: this.proj, shown: false, shownAt: 1, hiddenAt: 2 }));
+    }
     this.folders = opts.noFolder ? [] : [this.proj];
     this.now = opts.now || 1_800_000_000_000;
     this.config = {
@@ -138,13 +143,15 @@ class Harness {
   // A running session: a real process (so the panel's liveness check passes) and its registry file.
   // `background`: the session has a background command running (a shell child, as Claude Code starts
   // one). `entrypoint`, `pidDomain`, `procStart` override what the registry record says.
-  session(name, { status = 'idle', cwd = this.proj, regName, transcript, background, entrypoint = 'claude-vscode', pidDomain, procStart: ps } = {}) {
+  // `ignoresStop`: the process ignores SIGTERM.
+  session(name, { status = 'idle', cwd = this.proj, regName, transcript, background, ignoresStop, entrypoint = 'claude-vscode', pidDomain, procStart: ps } = {}) {
     const id = this.id(name);
     if (transcript) this.transcript(name, transcript, cwd);
     const k = background
       ? realSpawn('sh', ['-c', 'sh -c "sleep 600; : .claude/shell-snapshots/snapshot-bash.sh" & wait'], { stdio: 'ignore', detached: true })
-      : realSpawn('sleep', ['600'], { stdio: 'ignore' });
-    k.group = !!background;
+      : ignoresStop ? realSpawn('sh', ['-c', 'trap "" TERM; sleep 600 & wait; wait'], { stdio: 'ignore', detached: true })
+        : realSpawn('sleep', ['600'], { stdio: 'ignore' });
+    k.group = !!(background || ignoresStop);
     kids.add(k);
     this.kids.push(k);
     const exited = new Promise(res => k.once('exit', () => { kids.delete(k); res(); }));

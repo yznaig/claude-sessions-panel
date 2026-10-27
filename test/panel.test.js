@@ -234,12 +234,12 @@ withHarness('Good to close: shown as closed, no green, no sound', h => {
   eq(h.row('c').closed, true); eq(h.row('c').attention, null); same(h.takeSounds(), []);
 });
 
-withHarness('Good to close without the trail mod: moves to Removed two minutes later, and stops', async h => {
+withHarness('Good to close without the trail mod: moves to Removed two minutes later, and is not stopped', async h => {
   const c = h.session('c', { transcript: closing(h) });
   h.start();
-  h.step(60e3); await h.pause(); eq(h.row('c').dismissed, false); assert.ok(c.alive());
+  h.step(60e3); eq(h.row('c').dismissed, false);
   h.step(70e3); eq(h.row('c').dismissed, true);
-  await c.gone(); h.step(); eq(h.row('c').status, 'asleep');
+  await h.pause(); assert.ok(c.alive(), 'auto-close stops it later, with all its checks');
 });
 
 withHarness('Good to close: moves to Removed once VS Code hides it', h => {
@@ -602,4 +602,48 @@ withHarness('auto-close skips a session on screen; once hidden, it counts from t
   assert.ok(a.alive());
   h.step(1.1 * H); await a.gone(); h.step();
   eq(h.row('a').status, 'asleep');
+});
+
+withHarness('auto-close needs the session-trail mod: without it the panel cannot tell what is on screen', { noTrail: true }, async h => {
+  const a = h.session('a');
+  h.start(); h.step(5 * H); await h.pause();
+  assert.ok(a.alive()); eq(h.row('a').status, 'idle');
+});
+
+withHarness('X: asks if the session started working since the last look', async h => {
+  const a = h.session('a');
+  h.start();
+  a.set('busy'); // no refresh in between
+  h.confirm = undefined; await h.send({ type: 'dismiss', id: a.id });
+  eq(h.asked.length, 1); eq(h.row('a').dismissed, false);
+  await h.pause(); assert.ok(a.alive());
+});
+
+withHarness('a reply unread here stays green even when another window did the stopping', async h => {
+  const a = h.session('a', { status: 'busy', transcript: [L.user('go'), L.text(words(50))] });
+  h.start(); a.set('idle'); h.step();
+  eq(h.row('a').attention, 'ready');
+  // Another window, which never saw the turn end, stops it and records no unread reply.
+  h.globalState.update('claudeSessions.asleep', [[a.id, { pid: a.pid, at: h.now, ready: false }]]);
+  h.step(); await a.end(); h.step();
+  eq(h.row('a').status, 'asleep'); eq(h.row('a').attention, 'ready');
+});
+
+withHarness('a process that ignores the stop is not signalled again for an hour', async h => {
+  const a = h.session('a', { ignoresStop: true });
+  h.start(); h.step(4.1 * H); await h.pause();
+  eq(h.row('a').stopping, true); assert.ok(a.alive());
+  h.step(61e3); h.step();
+  eq(h.row('a').stopping, false, 'given up on for now');
+  h.step(30 * 60e3); eq(h.row('a').stopping, false);
+  h.step(31 * 60e3); eq(h.row('a').stopping, true, 'tried again after the hour');
+});
+
+withHarness("an asleep record outlasts a window that doesn't list the session yet", h => {
+  const id = h.id('far');
+  h.globalState.update('claudeSessions.asleep', [[id, { pid: 2 ** 22 - 9, at: h.now, ready: false }]]);
+  h.start(); h.step();
+  // The window that lists it saves its list a while later.
+  h.globalState.update(OPEN_KEY, [{ id, cwd: h.other, name: 'far', since: h.now, startedAt: h.now }]);
+  return h.send({ type: 'toggleAll' }).then(() => { h.step(); eq(h.row('far').status, 'asleep'); });
 });

@@ -274,13 +274,14 @@ class Provider {
 
   // The X: off the list and its process stopped. A session working or waiting on you asks first.
   async remove(id) {
+    if (this.look) this.look(); // what it is doing now, not at the last look
     const risk = this.list.stopRisk(id);
     let stop = true;
     if (risk) {
       const row = this.list.rows(true).find(r => r.id === id);
       const pick = await vscode.window.showWarningMessage(
         `"${row ? row.name : id}" is ${risk === 'working' ? 'still working' : 'waiting for your answer'}. Stop it too?`,
-        { modal: true, detail: `Stopping ends its process and cuts off what it is ${risk === 'working' ? 'doing' : 'waiting for'}. The conversation is saved: bring it back from Removed and click it to wake it.` },
+        { modal: true, detail: `Stopping ends its process and cuts off what it is ${risk === 'working' ? 'doing' : 'waiting for'}. The conversation is saved: ↩ in Removed brings it back until VS Code restarts, and Claude Code's own session list always has it.` },
         STOP_AND_REMOVE, REMOVE_ONLY);
       if (!pick) return;
       stop = pick === STOP_AND_REMOVE;
@@ -504,6 +505,7 @@ function start(host) {
   // A look at the registry and the trail; plays the sounds the changes call for.
   const look = () => { for (const kind of list.observe(readRegistry(), readTrail())) playSound(kind); };
   const provider = new Provider(context, list, vscode.Uri.file(host.root), host.carried);
+  provider.look = look;
   const history = new History(look, list, scope);
   subs.push({ dispose: () => provider.detach() });
 

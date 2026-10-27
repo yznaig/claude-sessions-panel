@@ -38,8 +38,11 @@ const UPGRADE_WINDOW_MS = 12 * 3600e3;
 // A filed session's saved copy is rewritten when its title or folder changes, or it is this stale.
 const FILED_COPY_STALE_MS = 10 * 60e3;
 // A stopped session's process normally goes within seconds; one still there after this is taken as
-// not stopped (it is tried again the next time it qualifies).
+// not stopped, and left alone for STUCK_RETRY_MS before it is tried again.
 const STOP_GRACE_MS = 60e3;
+const STUCK_RETRY_MS = 3600e3;
+// An asleep record no list holds is let go after this: another window may not have seen the list yet.
+const UNHELD_ASLEEP_MS = 24 * 3600e3;
 // Only sessions of Claude Code's VS Code extension are stopped: they wake by a click. A terminal
 // session would not come back where it was.
 const STOPPABLE_ENTRYPOINT = 'claude-vscode';
@@ -212,17 +215,30 @@ class Asleep {
   has(id) { return this.map.has(id); }
   add(id, rec) { this.load(); this.map.set(id, rec); this.save(); }
   clearReady(id) { this.load(); const a = this.map.get(id); if (a && a.ready) { a.ready = false; this.save(); } }
+  // A window that saw the reply arrive marks it unread, whichever window did the stopping.
+  markReady(id, pid) {
+    if (!this.has(id)) return;
+    this.load();
+    const a = this.map.get(id);
+    if (a && a.pid === pid && !a.ready) { a.ready = true; this.save(); }
+  }
   // Let go of sessions running again (a new process), stops that did not take, and sessions no
-  // list holds any more (`held`).
+  // list holds any more (`held`). Returns the pids that did not stop.
   tidy(regs, now, held) {
     this.load();
     const live = new Map(regs.map(r => [r.sessionId, r]));
+    const stuck = [];
     let changed = false;
     for (const [id, a] of [...this.map]) {
       const r = live.get(id);
-      if (r ? r.pid !== a.pid || now - a.at > STOP_GRACE_MS : !held(id)) { this.map.delete(id); changed = true; }
+      let drop;
+      if (!r) drop = !held(id) && now - a.at > UNHELD_ASLEEP_MS;
+      else if (r.pid !== a.pid) drop = true;
+      else if (now - a.at > STOP_GRACE_MS) { drop = true; stuck.push(r.pid); }
+      if (drop) { this.map.delete(id); changed = true; }
     }
     if (changed) this.save();
+    return stuck;
   }
   save() { void this.store.update(KEYS.asleep, [...this.map].slice(-500)); }
 }
@@ -268,6 +284,7 @@ class SessionList {
     };
     this.asleep = new Asleep(store);
     this.kept = new Kept(store);
+    this.stuck = new Map(); // pid -> when a stop of it did not take
     this.saved = new Saved(store, scope, carried, upgrade, id => this.asleep.has(id));
     this.folders = new Folders(store);
   }
@@ -291,6 +308,7 @@ class SessionList {
     const now = this.now();
     const sounds = [];
     this.folders.load();
+    this.asleep.load();
     // The most recent time each window's folder showed some session: a switch made by the panel's
     // own click does not always record the old session as hidden, but it always records the new one.
     const lastShownIn = cwd => {
@@ -320,7 +338,7 @@ class SessionList {
           const leftIt = shown
             ? (!shown.shown && shown.hiddenAt >= t.closedAt) || lastShownIn(r.cwd) > Math.max(t.closedAt, shown.shownAt)
             : now - t.closedAt > NO_TRAIL_CLOSE_MS;
-          if (leftIt) { this.dismiss(id); this.stop(r); this.markAutoClosed(key); }
+          if (leftIt) { this.dismiss(id); this.markAutoClosed(key); }
         }
         continue;
       }
@@ -340,6 +358,7 @@ class SessionList {
       }
       this.prevStatus.set(id, status);
     }
+    for (const r of regs) if (this.attention.get(r.sessionId) === 'ready') this.asleep.markReady(r.sessionId, r.pid);
     for (const id of [...this.prevStatus.keys()]) {
       if (!seen.has(id)) { this.prevStatus.delete(id); this.attention.delete(id); }
     }
@@ -353,7 +372,7 @@ class SessionList {
     }));
     this.saved.rebuild({ live, liveIds: this.liveIds, isRemoved: id => this.removed.has(id), isClosed, now });
     this.folders.track(live.map(x => x.entry), this.liveIds, isClosed);
-    this.asleep.tidy(regs, now, id => this.saved.listed.has(id) || !!this.folders.of(id) || this.removed.has(id));
+    for (const pid of this.asleep.tidy(regs, now, id => this.saved.listed.has(id) || !!this.folders.of(id) || this.removed.has(id))) this.stuck.set(pid, now);
     this.autoClose(trail, now);
     return sounds;
   }
@@ -383,15 +402,17 @@ class SessionList {
 
   // Stops sessions with nothing going on for autoCloseMs: not working, not waiting on you, not kept
   // running, not on screen, no background command, nothing written by them or a subagent, not shown
-  // or hidden.
+  // or hidden. Needs the session-trail mod, and leaves a process that ignored a stop for an hour.
   autoClose(trail, now) {
     const ms = this.autoCloseMs();
-    if (!(ms > 0)) return;
+    // Without the session-trail mod nothing says which sessions are on screen.
+    if (!(ms > 0) || !trail.size) return;
     const kept = this.kept.ids();
     for (const r of this.regs) {
       const id = r.sessionId;
       if ((r.status || 'idle') !== 'idle' || this.attention.get(id) === 'waiting') continue;
       if (kept.has(id) || this.asleep.has(id) || !this.stoppable(r)) continue;
+      if (now - (this.stuck.get(r.pid) || -Infinity) < STUCK_RETRY_MS) continue;
       const t = trail.get(id);
       // On screen in some window: Claude Code would show an error banner in its place.
       if (t && t.shown) continue;
