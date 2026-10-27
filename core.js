@@ -24,6 +24,11 @@ const OPEN_KEY = 'claudeSessions.open';
 const ENDED_GRACE_MS = 30e3;
 // The one-time rebuild after upgrading to 0.6.0 takes stopped sessions active within this window.
 const UPGRADE_WINDOW_MS = 12 * 3600e3;
+// Your folders: their names in tab order, and the folder each filed session is in, with a copy of
+// its row so it shows even when it is not running. Shared by every window.
+const FOLDERS_KEY = 'claudeSessions.folders';
+// The tab each window shows: a folder's name, or '' for Main (the unfiled sessions).
+const VIEW_FOLDER_KEY = 'claudeSessions.viewFolder';
 
 function cfg() { return vscode.workspace.getConfiguration('claudeSessions'); }
 function sessionsDir() { return cfg().get('sessionsDir') || path.join(os.homedir(), '.claude', 'sessions'); }
@@ -302,6 +307,84 @@ class Tracker {
     let open = context.globalState.get(OPEN_KEY);
     if (!Array.isArray(open)) open = this.listedBeforeUpgrade(new Set(removed.map(x => (Array.isArray(x) ? x[0] : x))));
     for (const e of open) if (e && e.id) { this.known.set(e.id, e); this.kept.set(e.id, e); }
+    this.loadFolders();
+  }
+
+  // ---- folders ----
+  // Read fresh before each use: another window may have changed them.
+  loadFolders() {
+    const f = this.context.globalState.get(FOLDERS_KEY) || {};
+    this.folders = (Array.isArray(f.names) ? f.names : []).filter(n => typeof n === 'string' && n);
+    const filed = (Array.isArray(f.filed) ? f.filed : []).filter(x => Array.isArray(x) && x[1] && x[1].entry && this.folders.includes(x[1].folder));
+    this.filed = new Map(filed);  // sessionId -> { folder, entry }
+  }
+  saveFolders() { return this.context.globalState.update(FOLDERS_KEY, { names: this.folders, filed: [...this.filed] }); }
+  folderOf(id) { const f = this.filed.get(id); return f ? f.folder : ''; }
+
+  // Move a session to a folder, or to Main with ''.
+  moveTo(id, folder) {
+    this.loadFolders();
+    const was = this.filed.get(id);
+    if (folder) {
+      const entry = this.known.get(id) || (was && was.entry);
+      if (!entry || !this.folders.includes(folder)) return;
+      this.filed.set(id, { folder, entry });
+    } else {
+      if (!was) return;
+      this.filed.delete(id);
+      this.toMain(id, was.entry);
+    }
+    void this.saveFolders();
+  }
+
+  // A stopped session coming out of a folder joins Main's saved list as a "not running" row, even
+  // one that ended while VS Code ran, which Main would otherwise drop.
+  toMain(id, entry) {
+    if (this.liveIds.has(id) || this.dismissed.has(id)) return;
+    const e = this.known.get(id) || entry;
+    this.known.set(id, e);
+    this.liveThisRun.delete(id);
+    this.goneAt.delete(id);
+    this.kept.set(id, e);
+    void this.saveKept();
+  }
+
+  addFolder(name) {
+    this.loadFolders();
+    if (this.folders.includes(name)) return;
+    this.folders.push(name);
+    void this.saveFolders();
+  }
+  renameFolder(from, to) {
+    this.loadFolders();
+    const i = this.folders.indexOf(from);
+    if (i < 0 || this.folders.includes(to)) return;
+    this.folders[i] = to;
+    for (const f of this.filed.values()) if (f.folder === from) f.folder = to;
+    void this.saveFolders();
+  }
+  // Its sessions go back to Main.
+  deleteFolder(name) {
+    this.loadFolders();
+    this.folders = this.folders.filter(n => n !== name);
+    for (const [id, f] of [...this.filed]) if (f.folder === name) { this.filed.delete(id); this.toMain(id, f.entry); }
+    void this.saveFolders();
+  }
+
+  // Keep each running filed session's copy current, and let go of filed sessions that closed.
+  keepFiled(regs, now) {
+    let changed = false;
+    for (const r of regs) {
+      const f = this.filed.get(r.sessionId);
+      if (!f) continue;
+      const e = this.entryOf(r, now);
+      if (e.name !== f.entry.name || e.cwd !== f.entry.cwd || e.since - f.entry.since > 10 * 60e3) { f.entry = e; changed = true; }
+    }
+    for (const [id, f] of [...this.filed]) {
+      if (this.liveIds.has(id) || !readTranscript({ sessionId: id, cwd: f.entry.cwd }).closed) continue;
+      this.filed.delete(id); changed = true;
+    }
+    if (changed) void this.saveFolders();
   }
 
   // The in-memory state a panel reload hands to the next copy (the rest is in globalState).
@@ -387,6 +470,7 @@ class Tracker {
     const regs = readRegistry();
     const trail = readTrail();
     const now = Date.now();
+    this.loadFolders();
     // The most recent time each window's folder showed some session: a switch made by
     // the panel's own click does not always record the old session as hidden, but it
     // always records the new one as shown.
@@ -434,7 +518,7 @@ class Tracker {
       } else if (status === 'idle' && prev === 'busy') {
         this.attention.set(id, 'ready');
         this.undismiss(id);
-        playSound('ready');
+        if (!this.folderOf(id)) playSound('ready'); // a filed session's ready is a quiet dot on its tab
       }
       this.prevStatus.set(id, status);
     }
@@ -444,6 +528,7 @@ class Tracker {
     this.firstLoad = false;
     this.sessions = regs;
     this.keep(regs, now);
+    this.keepFiled(regs, now);
   }
 
   markAutoClosed(key) {
@@ -459,9 +544,12 @@ class Tracker {
     const e = this.known.get(id);
     if (e && !this.liveIds.has(id)) { this.kept.set(id, e); void this.saveKept(); }
   }
+  // Removing a session also takes it out of its folder; brought back, it returns to Main.
   dismiss(id) {
     this.dismissed.set(id, Date.now()); this.attention.delete(id); void this.saveDismissed();
     if (this.kept.delete(id)) void this.saveKept();
+    this.loadFolders();
+    if (this.filed.delete(id)) void this.saveFolders();
   }
   restore(id) { this.undismiss(id); }
   ack(id) { this.attention.delete(id); }
@@ -470,6 +558,14 @@ class Tracker {
     const folders = (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath);
     if (!folders.length || !cwd) return true;
     return folders.some(f => cwd === f || cwd.startsWith(f.replace(/\/$/, '') + '/'));
+  }
+
+  offlineRow(e, dismissed) {
+    return {
+      id: e.id, pid: null, name: displayName({ sessionId: e.id, cwd: e.cwd, name: e.name }), cwd: e.cwd,
+      repo: path.basename(e.cwd) || '?', status: 'offline', attention: null, dismissed,
+      waitingFor: '', since: e.since, startedAt: e.startedAt || e.since, closed: false, folder: this.folderOf(e.id),
+    };
   }
 
   view(showAll) {
@@ -481,11 +577,7 @@ class Tracker {
       if (!dismissed && !this.kept.has(e.id)) continue;
       if (dismissed && this.removedExpired(e.id, now)) continue;
       if (!showAll && !this.inThisWindow(e.cwd)) continue;
-      rows.push({
-        id: e.id, pid: null, name: displayName({ sessionId: e.id, cwd: e.cwd, name: e.name }), cwd: e.cwd,
-        repo: path.basename(e.cwd) || '?', status: 'offline', attention: null, dismissed,
-        waitingFor: '', since: e.since, startedAt: e.startedAt || e.since, closed: false,
-      });
+      rows.push(this.offlineRow(e, dismissed));
     }
     for (const r of this.sessions) {
       const id = r.sessionId;
@@ -499,8 +591,15 @@ class Tracker {
         id, pid: r.pid, name: displayName(r), cwd: r.cwd || '',
         repo: path.basename(r.cwd || '') || '?', status, attention, dismissed,
         waitingFor: r.waitingFor || '', since, startedAt: r.startedAt || since,
-        closed: status === 'idle' && readTranscript(r).closed,
+        closed: status === 'idle' && readTranscript(r).closed, folder: this.folderOf(id),
       });
+    }
+    // Filed sessions no list above holds (ended here, or another window's): shown from the folder's copy.
+    const listed = new Set(rows.map(x => x.id));
+    for (const [id, f] of this.filed) {
+      if (listed.has(id) || this.liveIds.has(id) || this.dismissed.has(id)) continue;
+      if (!showAll && !this.inThisWindow(f.entry.cwd)) continue;
+      rows.push(this.offlineRow(f.entry, false));
     }
     const rank = x => x.attention === 'waiting' ? 0 : x.attention === 'ready' ? 1 : x.status === 'busy' ? 2 : x.closed ? 4 : 3;
     rows.sort((a, b) => rank(a) - rank(b) || b.since - a.since);
@@ -519,6 +618,63 @@ class Provider {
     this.listeners = [];
     this.showAll = context.globalState.get(SHOW_ALL_KEY, false);
     this.showDismissed = !!(carried && carried.showDismissed);
+    this.viewFolder = context.workspaceState.get(VIEW_FOLDER_KEY, '');
+  }
+
+  showFolder(name) {
+    this.viewFolder = name || '';
+    void this.context.workspaceState.update(VIEW_FOLDER_KEY, this.viewFolder);
+  }
+
+  // VS Code's input box: webviews cannot open prompts of their own.
+  askFolderName(title, value) {
+    const t = this.tracker;
+    t.loadFolders();
+    return vscode.window.showInputBox({
+      title, value, prompt: 'Folder name',
+      validateInput: v => {
+        const n = v.trim();
+        if (!n) return 'Give the folder a name';
+        if (n.length > 40) return 'Keep it under 40 characters';
+        if (/^main$/i.test(n)) return 'Main is the list of sessions not in any folder';
+        if (n !== value && t.folders.some(f => f.toLowerCase() === n.toLowerCase())) return 'There is already a folder by that name';
+        return null;
+      },
+    }).then(v => (v === undefined ? undefined : v.trim()));
+  }
+
+  async onFolderMessage(m) {
+    const t = this.tracker;
+    switch (m.type) {
+      case 'showFolder': this.showFolder(m.folder); break;
+      case 'move': t.moveTo(m.id, m.folder || ''); break;
+      case 'newFolder': {
+        const name = await this.askFolderName(m.id ? 'New folder for this session' : 'New folder');
+        if (!name) return;
+        t.addFolder(name);
+        if (m.id) t.moveTo(m.id, name); else this.showFolder(name);
+        break;
+      }
+      case 'renameFolder': {
+        const name = await this.askFolderName(`Rename folder "${m.folder}"`, m.folder);
+        if (!name || name === m.folder) return;
+        t.renameFolder(m.folder, name);
+        if (this.viewFolder === m.folder) this.showFolder(name);
+        break;
+      }
+      case 'deleteFolder': {
+        t.loadFolders();
+        const n = [...t.filed.values()].filter(f => f.folder === m.folder).length;
+        const ok = await vscode.window.showWarningMessage(
+          `Delete the folder "${m.folder}"?`,
+          { modal: true, detail: n ? `Its ${n} session${n === 1 ? '' : 's'} go${n === 1 ? 'es' : ''} back to Main.` : 'It is empty.' },
+          'Delete');
+        if (ok !== 'Delete') return;
+        t.deleteFolder(m.folder);
+        if (this.viewFolder === m.folder) this.showFolder('');
+        break;
+      }
+    }
   }
 
   // Called by extension.js with the panel's view, when VS Code first shows it or after a reload.
@@ -554,6 +710,8 @@ class Provider {
       case 'toggleAll': this.toggleAll(); return;
       case 'toggleDismissed': this.showDismissed = !this.showDismissed; break;
       case 'ready': break;
+      case 'showFolder': case 'move': case 'newFolder': case 'renameFolder': case 'deleteFolder':
+        await this.onFolderMessage(m); break;
     }
     this.push();
   }
@@ -568,11 +726,15 @@ class Provider {
     const rows = this.tracker.view(this.showAll);
     const live = rows.filter(r => !r.dismissed);
     writeSnapshot(live, this.showAll);
-    const needing = live.filter(r => r.attention).length;
+    // A filed session counts only when it needs you; its ready shows as a dot on its folder's tab.
+    const needing = live.filter(r => r.attention === 'waiting' || (r.attention && !r.folder)).length;
+    const folders = this.tracker.folders;
+    if (this.viewFolder && !folders.includes(this.viewFolder)) this.showFolder('');
     if (this.view) {
       this.view.badge = needing ? { value: needing, tooltip: `${needing} Claude session${needing === 1 ? '' : 's'} need${needing === 1 ? 's' : ''} you` } : undefined;
       void this.view.webview.postMessage({
         type: 'state', rows, showAll: this.showAll, showDismissed: this.showDismissed,
+        folders, viewFolder: this.viewFolder,
         soundOn: !!cfg().get('sound.enabled'), now: Date.now(),
         window: (vscode.workspace.workspaceFolders || []).map(f => path.basename(f.uri.fsPath)).join(', ') || 'no folder',
       });
@@ -606,6 +768,7 @@ function writeSnapshot(rows, showAll) {
     rows: rows.map(r => ({
       id: r.id, name: r.name, cwd: r.cwd,
       state: r.attention || (r.closed ? 'closed' : r.status === 'offline' ? 'not running' : r.status),
+      ...(r.folder ? { folder: r.folder } : {}),
     })),
   };
   const text = JSON.stringify(body);

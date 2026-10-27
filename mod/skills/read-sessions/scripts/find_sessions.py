@@ -296,7 +296,7 @@ def cmd_panel(a, live):
         r = row(s, live) if s else {'id': p['id'], 'title': p.get('name', ''), 'cwd': p.get('cwd', ''), 'start': None, 'end': None,
                                     'turns': 0, 'state': 'no transcript', 'path': '', 'first': '', 'last': ''}
         r['title'] = p.get('name') or r['title']
-        r['panelState'] = p.get('state')
+        r['panelState'] = p.get('state') + (f" · in folder {p['folder']}" if p.get('folder') else '')
         rows.append(r)
     age = int((time.time() * 1000 - sn.get('updatedAt', 0)) / 60000)
     head = f"Panel ({', '.join(os.path.basename(f) for f in sn.get('folders') or []) or 'no folder'}"
