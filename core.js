@@ -180,7 +180,7 @@ class Provider {
 
   // VS Code's input box: webviews cannot open prompts of their own.
   askFolderName(title, value) {
-    const names = this.list.folderNames;
+    const list = this.list;
     return vscode.window.showInputBox({
       title, value, prompt: 'Folder name',
       validateInput: v => {
@@ -188,7 +188,8 @@ class Provider {
         if (!n) return 'Give the folder a name';
         if (n.length > 40) return 'Keep it under 40 characters';
         if (/^main$/i.test(n)) return 'Main is the list of sessions not in any folder';
-        if (n !== value && names.some(f => f.toLowerCase() === n.toLowerCase())) return 'There is already a folder by that name';
+        // Read on each keystroke: another window may add a folder while the box is open.
+        if (n !== value && list.folderNames.some(f => f.toLowerCase() === n.toLowerCase())) return 'There is already a folder by that name';
         return null;
       },
     }).then(v => (v === undefined ? undefined : v.trim()));
@@ -271,12 +272,13 @@ class Provider {
   }
 
   push() {
+    // Folders first: reading them loads the latest copy, so the tabs and the rows' filing agree.
+    const folders = this.list.folderNames;
     const rows = this.list.rows(this.showAll);
     const live = rows.filter(r => !r.dismissed);
     writeSnapshot(live, this.showAll);
     // A filed session counts only when it needs you; its ready shows as a dot on its folder's tab.
     const needing = live.filter(r => r.attention === 'waiting' || (r.attention && !r.folder)).length;
-    const folders = this.list.folderNames;
     if (this.viewFolder && !folders.includes(this.viewFolder)) this.showFolder('');
     if (this.view) {
       this.view.badge = needing ? { value: needing, tooltip: `${needing} Claude session${needing === 1 ? '' : 's'} need${needing === 1 ? 's' : ''} you` } : undefined;

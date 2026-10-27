@@ -404,3 +404,14 @@ withHarness("Alt+Q: back to the session shown before this one, this window's onl
   eq(h.executed.at(-1)[1], a.id);
   assert.notEqual(h.executed.at(-1)[1], b.id);
 });
+
+withHarness('folders changed by another window: tabs and filing agree in the very next update', async h => {
+  const a = h.session('a');
+  h.start();
+  const entry = { id: a.id, cwd: h.proj, name: 'a', since: h.now, startedAt: h.now };
+  h.globalState.update('claudeSessions.folders', { names: ['F'], filed: [[a.id, { folder: 'F', entry }]] });
+  await h.send({ type: 'toggleDismissed' }); // any update, no refresh in between
+  same(h.state.folders, ['F']); eq(h.row('a').folder, 'F');
+  h.answers.push('f'); await h.send({ type: 'newFolder' });
+  same(h.state.folders, ['F'], 'same name in another case refused');
+});
