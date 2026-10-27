@@ -579,6 +579,8 @@ class Tracker {
   // Clicking the row clears it like any green; a session that needs you stays blue.
   toggleMark(id) {
     if (!this.liveIds.has(id)) return;
+    const reg = this.sessions.find(r => r.sessionId === id);
+    if (reg && reg.status === 'busy') return; // running: it turns green by itself when the turn ends
     const a = this.attention.get(id);
     if (a === 'ready') this.attention.delete(id);
     else if (!a) this.attention.set(id, 'ready');

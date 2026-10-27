@@ -95,8 +95,9 @@
     d.appendChild(el('span', 'dot ' + kind));
     d.appendChild(el('span', 'name', r.name));
     d.appendChild(el('span', 'repo', r.repo));
-    // The star: mark a running session green to come back to it, or clear the mark.
-    if (!r.dismissed && !r.closed && r.status !== 'offline' && r.attention !== 'waiting') {
+    // The star: mark an idle session green to come back to it, or clear the mark. Not on running
+    // sessions (they turn green by themselves) or ones that need you (already blue).
+    if (!r.dismissed && !r.closed && r.status !== 'offline' && r.status !== 'busy' && r.attention !== 'waiting') {
       const marked = r.attention === 'ready';
       const star = el('button', 'star', marked ? '★' : '☆');
       star.title = marked ? 'Clear the green mark' : 'Mark green to come back to it';

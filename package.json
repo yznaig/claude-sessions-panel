@@ -2,7 +2,7 @@
   "name": "claude-sessions-panel",
   "displayName": "Claude Sessions",
   "description": "A bottom-panel tab listing your live Claude Code sessions: running, response ready (green), needs an answer (blue). Click to focus the session. Plus a Usage view: the current usage windows of every Claude Code and Codex login on the machine.",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "publisher": "yznaig",
   "license": "MIT",
   "author": "yznaig",
