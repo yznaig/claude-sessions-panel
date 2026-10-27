@@ -65,6 +65,28 @@
     ]);
   }
 
+  // ---- your time for a ready reply ----
+  // Heat from teal (quick) through amber (a few minutes) to red (8 minutes or more).
+  const HEAT = [[0, [78, 201, 176]], [3, [215, 186, 125]], [8, [244, 135, 113]]];
+  function heat(m) {
+    for (let i = 0; i < HEAT.length - 1; i++) {
+      const [a, ca] = HEAT[i], [b, cb] = HEAT[i + 1];
+      if (m <= b) { const t = Math.max(0, (m - a) / (b - a)); return 'rgb(' + ca.map((c, k) => Math.round(c + (cb[k] - c) * t)).join(',') + ')'; }
+    }
+    return 'rgb(' + HEAT[HEAT.length - 1][1].join(',') + ')';
+  }
+  const minutesText = m => (m < 0.75 ? '<1m' : '~' + Math.round(m) + 'm');
+  const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+  function costChip(r) {
+    if (!r.cost) return el('span');
+    const c = r.cost;
+    const chip = el('span', 'chip', minutesText(c.minutes) + (c.decisions ? ' · ' + plural(c.decisions, 'decision') : ''));
+    chip.style.background = heat(c.minutes);
+    chip.title = `Your time, roughly: ${plural(c.words, 'word')} to read (${(c.words / 230).toFixed(1)} min)` +
+      (c.decisions ? ` + ${plural(c.decisions, 'numbered item')} to decide (${(c.decisions * 0.75).toFixed(1)} min)` : '');
+    return chip;
+  }
+
   function row(r) {
     const kind = r.closed ? 'closed' : (r.attention || r.status);
     const offline = r.status === 'offline';
@@ -73,6 +95,7 @@
     d.appendChild(el('span', 'dot ' + kind));
     d.appendChild(el('span', 'name', r.name));
     d.appendChild(el('span', 'repo', r.repo));
+    d.appendChild(costChip(r));
     d.appendChild(el('span', 'state ' + kind, label(r)));
     d.appendChild(el('span', 'age', age(state.now - r.since)));
     if (r.dismissed) {
@@ -153,7 +176,13 @@
       else if (live.length) msg = 'Nothing on Main: every session here is in a folder.';
       list.appendChild(el('div', 'empty', msg));
     }
+    const costed = shown.filter(r => r.cost);
+    list.classList.toggle('costs', costed.length > 0);
     for (const r of shown) list.appendChild(row(r));
+    if (costed.length > 1) {
+      const total = costed.reduce((n, r) => n + r.cost.minutes, 0);
+      list.appendChild(el('div', 'costsum', `${costed.length} ready · about ${Math.max(1, Math.round(total))} min of you · shortest first`));
+    }
     dismissedEl.replaceChildren();
     if (state.showDismissed && gone.length) {
       dismissedEl.appendChild(el('h4', '', 'Removed — click ↩ to bring one back; any new activity brings it back on its own'));

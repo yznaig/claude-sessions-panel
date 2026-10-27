@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.12.0 — 2026-10-26
+**Time chips**: each session with a response ready shows roughly how long it will take you (reading time plus 45 seconds per numbered decision), colored teal to red, and ready sessions sort shortest first, with a total under the list. No window reload needed: ↻ Reload Panel picks it up.
+
 ## 0.11.0 — 2026-10-26
 **Folders**: tabs along the top of the list (Main, then your folders, each with a count) to file sessions you want to come back to without keeping them on the main list. Move one with its ⋯ button, a right-click, or by dragging it onto a tab. Filed sessions stay put through restarts, other windows and ending, until you move or remove them or they close. In a folder, a session that needs you still sounds and counts on the badge, and a ready response is a quiet dot on the folder's tab. The panel's snapshot carries each row's folder. read-sessions (session-trail 0.2.2) reads only Main by default and says what it left out; `panel --folder NAME` reads one folder, `--all-folders` everything. No window reload needed: ↻ Reload Panel picks it up.
 

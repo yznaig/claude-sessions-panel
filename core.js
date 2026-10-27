@@ -82,9 +82,24 @@ function readRegistry(ended) {
 // reply opens with "Good to close", the session is done: the panel shows it as
 // closed and moves it to Removed once you switch away from it.
 //
+// Reply. The text of the latest turn after its last tool call: the reply a ready
+// session is waiting for you to read. Its length and its numbered items (replies
+// number only the decisions they ask of you) give the time it will take you.
+//
 // Each transcript is read once, then only the bytes added since.
 
 const transcriptCache = new Map(); // sessionId -> entry
+const FRESH = { offset: 0, tail: '', custom: null, ai: null, checking: false, closed: false, closedAt: 0, reply: '' };
+
+// Your time for a reply: reading at WORDS_PER_MIN, plus MIN_PER_DECISION for each numbered item.
+const WORDS_PER_MIN = 230;
+const MIN_PER_DECISION = 0.75;
+function replyCost(text) {
+  const words = (text.match(/\S+/g) || []).length;
+  const prose = text.replace(/```[\s\S]*?```/g, ' ');
+  const decisions = (prose.match(/^\d{1,2}[.)]\s/gm) || []).length;
+  return { words, decisions, minutes: words / WORDS_PER_MIN + decisions * MIN_PER_DECISION };
+}
 const CLOSE_SKILL = 'anything-left';
 const CLOSE_REPLY = /^[\s*_>#]*good to close\b/i;
 
@@ -112,7 +127,11 @@ function scanLine(entry, line) {
   const isAssistant = line.indexOf('"type":"assistant"') >= 0;
   if (line.indexOf('-title"') < 0 && !isUser && !isAssistant) return;
   if (isUser && line.indexOf('"tool_result"') >= 0) return;           // tool output, not a prompt
-  if (isAssistant && !entry.checking && line.indexOf(CLOSE_SKILL) < 0) return;
+  if (isAssistant && !entry.checking && line.indexOf(CLOSE_SKILL) < 0 && line.indexOf('"type":"text"') < 0) {
+    // Not text: only a tool call matters, which makes the text before it interim.
+    if (line.indexOf('"type":"tool_use"') >= 0 && line.indexOf('"isSidechain":true') < 0) entry.reply = '';
+    return;
+  }
   let r;
   try { r = JSON.parse(line); } catch { return; }
   if (r.type === 'custom-title' && r.customTitle) { entry.custom = r.customTitle; return; }
@@ -130,11 +149,14 @@ function scanLine(entry, line) {
     entry.checking = text.indexOf('<command-name>/' + CLOSE_SKILL) >= 0;
     entry.closed = false;
     entry.closedAt = 0;
+    entry.reply = '';
     return;
   }
   if (r.type === 'assistant') {
     for (const b of blocks) {
       if (b && b.type === 'tool_use' && b.name === 'Skill' && b.input && String(b.input.skill || '') === CLOSE_SKILL) entry.checking = true;
+      if (b && b.type === 'tool_use') entry.reply = '';
+      if (b && b.type === 'text' && b.text) entry.reply += (entry.reply ? '\n\n' : '') + b.text;
     }
     if (!entry.checking) return;
     const text = blocks.filter(b => b && b.type === 'text').map(b => b.text || '').join('\n').trim();
@@ -147,13 +169,13 @@ function scanLine(entry, line) {
 function readTranscript(rec) {
   let entry = transcriptCache.get(rec.sessionId);
   if (!entry || !entry.file) {
-    entry = { file: transcriptFor(rec), offset: 0, tail: '', custom: null, ai: null, checking: false, closed: false, closedAt: 0 };
+    entry = { file: transcriptFor(rec), ...FRESH };
     transcriptCache.set(rec.sessionId, entry);
   }
   if (!entry.file) return entry;
   let size;
   try { size = fs.statSync(entry.file).size; } catch { entry.file = null; return entry; }
-  if (size < entry.offset) Object.assign(entry, { offset: 0, tail: '', custom: null, ai: null, checking: false, closed: false, closedAt: 0 }); // rewritten
+  if (size < entry.offset) Object.assign(entry, FRESH); // rewritten
   if (size > entry.offset) {
     let fd;
     try {
@@ -592,6 +614,7 @@ class Tracker {
         repo: path.basename(r.cwd || '') || '?', status, attention, dismissed,
         waitingFor: r.waitingFor || '', since, startedAt: r.startedAt || since,
         closed: status === 'idle' && readTranscript(r).closed, folder: this.folderOf(id),
+        cost: attention === 'ready' ? replyCost(readTranscript(r).reply) : null,
       });
     }
     // Filed sessions no list above holds (ended here, or another window's): shown from the folder's copy.
@@ -602,7 +625,9 @@ class Tracker {
       rows.push(this.offlineRow(f.entry, false));
     }
     const rank = x => x.attention === 'waiting' ? 0 : x.attention === 'ready' ? 1 : x.status === 'busy' ? 2 : x.closed ? 4 : 3;
-    rows.sort((a, b) => rank(a) - rank(b) || b.since - a.since);
+    // Ready sessions: the one that takes least of your time first.
+    const minutes = x => (x.cost ? x.cost.minutes : 0);
+    rows.sort((a, b) => rank(a) - rank(b) || minutes(a) - minutes(b) || b.since - a.since);
     return rows;
   }
 }
