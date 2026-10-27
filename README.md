@@ -35,6 +35,22 @@ Claude Code keeps a registry of its running processes at `~/.claude/sessions/<pi
 
 Focusing a session calls the Claude Code extension's own `claude-vscode.editor.open` command with the session id. That command is internal and undocumented, so it may change between extension versions; the command name is a setting if it does.
 
+### Code layout
+
+| File | What it owns |
+|---|---|
+| `extension.js` | The loader: registers the views and Reload Panel, starts the newest installed `core.js`. |
+| `core.js` | The VS Code side: reads the registry and trail, plays sounds, the webview, commands, Alt+Q, Alt+A, the snapshot. |
+| `sessions.js` | Which sessions are listed and how each stands: ready, needs you, removed, filed, saved for the restart. No VS Code, no files; everything comes in through its constructor. |
+| `transcript.js` | Reading transcripts: titles, "Good to close", the waiting reply and its time estimate. |
+| `window.js` | Which sessions belong to this window. |
+| `usage.js` | The Usage view. |
+| `media/` | The webviews' scripts and styles. |
+
+### Tests
+
+`npm test` runs `test/panel.test.js`: about 40 checks that drive the real code the way VS Code and the panel do (fake VS Code, stand-in session processes, real transcript files, a clock moved by hand) and check what the panel shows. Under a second; Linux or WSL, since session liveness is read from `/proc`.
+
 ## Install (from source)
 
 ```bash

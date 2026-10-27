@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.14.0 — 2026-10-26
+No change in what the panel does. Inside: a test suite (`npm test`, about 40 checks through the real code), and the session tracking moved out of `core.js` into `sessions.js`, where each saved list (Removed, the restart list, folders) has one owner, with `transcript.js` and `window.js` beside it.
+
 ## 0.13.1 — 2026-10-26
 The star no longer shows on running sessions. Clicking it there turned the row green for a few seconds until the next refresh; a running session turns green by itself when its turn ends.
 

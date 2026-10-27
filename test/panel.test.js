@@ -165,6 +165,8 @@ withHarness('restart: listed sessions come back, stopped ones as not running; Re
   eq(h.row('x'), undefined);
   await h.send({ type: 'focus', id: s.id });
   eq(h.executed.at(-1)[1], s.id);
+  h.session('x'); h.step(); // resumed later: back on the list, not still removed
+  eq(h.row('x').dismissed, false);
 });
 
 withHarness('a stopped session coming back to life turns into a live row', async h => {
@@ -387,4 +389,18 @@ withHarness('snapshot: the rows shown, with state and folder, never removed ones
   const by = Object.fromEntries(snap.rows.map(r => [r.id.slice(h.prefix.length), r]));
   eq(by.a.state, 'ready'); eq(by.i.state, 'idle'); eq(by.d, undefined); eq(by.f.folder, 'Later'); eq(by.i.folder, undefined);
   same(snap.folders, [h.proj]);
+});
+
+// ---- Alt+Q history -----------------------------------------------------------
+
+withHarness("Alt+Q: back to the session shown before this one, this window's only", async h => {
+  const t = h.now;
+  const a = h.session('a'); const b = h.session('b'); h.session('far', { cwd: h.other });
+  h.trail('a', { shown: false, shownAt: t - 9000, hiddenAt: t - 5000 });
+  h.trail('far', { shown: false, shownAt: t - 3000, hiddenAt: t - 2000 });
+  h.trail('b', { shown: true, shownAt: t - 1000 });
+  h.start();
+  await h.commands.get('claudeSessions.goBack')();
+  eq(h.executed.at(-1)[1], a.id);
+  assert.notEqual(h.executed.at(-1)[1], b.id);
 });

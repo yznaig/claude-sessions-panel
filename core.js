@@ -12,21 +12,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
-const DISMISSED_KEY = 'claudeSessions.dismissed';
-const AUTO_CLOSED_KEY = 'claudeSessions.autoClosed';
-// Without the session-trail mod nothing says when you left a closed session: move it after this.
-const NO_TRAIL_CLOSE_MS = 2 * 60e3;
 const SHOW_ALL_KEY = 'claudeSessions.showAllWindows';
-// The sessions the panel lists, saved so they come back after VS Code restarts.
-const OPEN_KEY = 'claudeSessions.open';
-// A session of this window's folder that stops while VS Code keeps running was ended on purpose and
-// leaves the saved list after this long; when VS Code itself closes, the panel is gone well before.
-const ENDED_GRACE_MS = 30e3;
-// The one-time rebuild after upgrading to 0.6.0 takes stopped sessions active within this window.
-const UPGRADE_WINDOW_MS = 12 * 3600e3;
-// Your folders: their names in tab order, and the folder each filed session is in, with a copy of
-// its row so it shows even when it is not running. Shared by every window.
-const FOLDERS_KEY = 'claudeSessions.folders';
 // The tab each window shows: a folder's name, or '' for Main (the unfiled sessions).
 const VIEW_FOLDER_KEY = 'claudeSessions.viewFolder';
 
@@ -71,132 +57,10 @@ function readRegistry(ended) {
   return [...byId.values()];
 }
 
-// ---- transcripts: titles and "good to close" -------------------------------
-//
-// Titles. The registry keeps a placeholder name ("command-hq-89") for a session
-// Claude names on its own; the real title is written into the session's
-// transcript. Same rule as the Claude extension's session list: the latest title
-// you set (custom-title) wins, else the latest generated one (ai-title).
-//
-// Closed. When a session's latest turn ran the anything-left skill and its final
-// reply opens with "Good to close", the session is done: the panel shows it as
-// closed and moves it to Removed once you switch away from it.
-//
-// Reply. The text of the latest turn after its last tool call: the reply a ready
-// session is waiting for you to read. Its length and its numbered items (replies
-// number only the decisions they ask of you) give the time it will take you.
-//
-// Each transcript is read once, then only the bytes added since.
-
-const transcriptCache = new Map(); // sessionId -> entry
-const FRESH = { offset: 0, tail: '', custom: null, ai: null, checking: false, closed: false, closedAt: 0, reply: '' };
-
-// Your time for a reply: reading at WORDS_PER_MIN, plus MIN_PER_DECISION for each numbered item.
-const WORDS_PER_MIN = 230;
-const MIN_PER_DECISION = 0.75;
-function replyCost(text) {
-  const words = (text.match(/\S+/g) || []).length;
-  const prose = text.replace(/```[\s\S]*?```/g, ' ');
-  const decisions = (prose.match(/^\d{1,2}[.)]\s/gm) || []).length;
-  const readMinutes = words / WORDS_PER_MIN, decideMinutes = decisions * MIN_PER_DECISION;
-  return { words, decisions, readMinutes, decideMinutes, minutes: readMinutes + decideMinutes };
-}
-const CLOSE_SKILL = 'anything-left';
-const CLOSE_REPLY = /^[\s*_>#]*good to close\b/i;
-
-function transcriptFor(rec) {
-  const projects = path.join(os.homedir(), '.claude', 'projects');
-  const direct = path.join(projects, String(rec.cwd || '').replace(/[^a-zA-Z0-9]/g, '-'), rec.sessionId + '.jsonl');
-  if (fs.existsSync(direct)) return direct;
-  try {
-    for (const d of fs.readdirSync(projects)) {
-      const p = path.join(projects, d, rec.sessionId + '.jsonl');
-      if (fs.existsSync(p)) return p;
-    }
-  } catch { /* no projects dir */ }
-  return null;
-}
-
-function blocksOf(r) {
-  const c = r && r.message && r.message.content;
-  if (typeof c === 'string') return [{ type: 'text', text: c }];
-  return Array.isArray(c) ? c : [];
-}
-
-function scanLine(entry, line) {
-  const isUser = line.indexOf('"type":"user"') >= 0;
-  const isAssistant = line.indexOf('"type":"assistant"') >= 0;
-  if (line.indexOf('-title"') < 0 && !isUser && !isAssistant) return;
-  if (isUser && line.indexOf('"tool_result"') >= 0) return;           // tool output, not a prompt
-  if (isAssistant && !entry.checking && line.indexOf(CLOSE_SKILL) < 0 && line.indexOf('"type":"text"') < 0) {
-    // Not text: only a tool call matters, which makes the text before it interim.
-    if (line.indexOf('"type":"tool_use"') >= 0 && line.indexOf('"isSidechain":true') < 0) entry.reply = '';
-    return;
-  }
-  let r;
-  try { r = JSON.parse(line); } catch { return; }
-  if (r.type === 'custom-title' && r.customTitle) { entry.custom = r.customTitle; return; }
-  if (r.type === 'ai-title' && r.aiTitle) { entry.ai = r.aiTitle; return; }
-  if (r.isSidechain) return;                                            // a subagent's own transcript rows
-  const blocks = blocksOf(r);
-  if (r.type === 'user') {
-    if (r.isMeta) return;
-    const texts = blocks.filter(b => b && b.type === 'text').map(b => String(b.text || '').trim()).filter(Boolean);
-    const text = texts.join(' ');
-    // A prompt can arrive as several blocks (an IDE note first, then the words): any block
-    // of the person's own, or a slash command, makes it theirs.
-    const typed = texts.some(t => !t.startsWith('<') || t.indexOf('<command-name>') >= 0);
-    if (!typed) return;                                                 // a reminder or notice, not the person
-    entry.checking = text.indexOf('<command-name>/' + CLOSE_SKILL) >= 0;
-    entry.closed = false;
-    entry.closedAt = 0;
-    entry.reply = '';
-    return;
-  }
-  if (r.type === 'assistant') {
-    for (const b of blocks) {
-      if (b && b.type === 'tool_use' && b.name === 'Skill' && b.input && String(b.input.skill || '') === CLOSE_SKILL) entry.checking = true;
-      if (b && b.type === 'tool_use') entry.reply = '';
-      if (b && b.type === 'text' && b.text) entry.reply += (entry.reply ? '\n\n' : '') + b.text;
-    }
-    if (!entry.checking) return;
-    const text = blocks.filter(b => b && b.type === 'text').map(b => b.text || '').join('\n').trim();
-    if (!text) return;
-    entry.closed = CLOSE_REPLY.test(text);                              // the turn's last words decide
-    entry.closedAt = entry.closed ? (Date.parse(r.timestamp) || Date.now()) : 0;
-  }
-}
-
-function readTranscript(rec) {
-  let entry = transcriptCache.get(rec.sessionId);
-  if (!entry || !entry.file) {
-    entry = { file: transcriptFor(rec), ...FRESH };
-    transcriptCache.set(rec.sessionId, entry);
-  }
-  if (!entry.file) return entry;
-  let size;
-  try { size = fs.statSync(entry.file).size; } catch { entry.file = null; return entry; }
-  if (size < entry.offset) Object.assign(entry, FRESH); // rewritten
-  if (size > entry.offset) {
-    let fd;
-    try {
-      fd = fs.openSync(entry.file, 'r');
-      const buf = Buffer.alloc(size - entry.offset);
-      fs.readSync(fd, buf, 0, buf.length, entry.offset);
-      const text = entry.tail + buf.toString('utf8');
-      const cut = text.lastIndexOf('\n');
-      if (cut >= 0) for (const line of text.slice(0, cut).split('\n')) scanLine(entry, line);
-      entry.tail = cut < 0 ? text : text.slice(cut + 1); // a line still being written
-      entry.offset = size;
-    } catch { /* try again next pass */ } finally { if (fd !== undefined) fs.closeSync(fd); }
-  }
-  return entry;
-}
-
-function displayName(rec) {
-  const t = readTranscript(rec);
-  return t.custom || t.ai || rec.name || String(rec.sessionId).slice(0, 8);
-}
+const transcripts = require('./transcript');
+const { displayName } = transcripts;
+const { SessionList } = require('./sessions');
+const { windowScope } = require('./window');
 
 // ---- sound ------------------------------------------------------------------
 
@@ -295,360 +159,12 @@ async function pickSound(kind) {
   vscode.window.setStatusBarMessage(`Claude Sessions: ${kind} sound set to ${chosen.value === '__browse__' ? path.basename(value) : value}`, 3000);
 }
 
-// ---- tracker ----------------------------------------------------------------
-
-class Tracker {
-  // `carried`: what carry() returned in the copy this one replaces, on a panel reload.
-  constructor(context, carried) {
-    this.context = context;
-    this.prevStatus = new Map(carried ? carried.prevStatus : []);   // sessionId -> last seen status
-    this.attention = new Map(carried ? carried.attention : []);     // sessionId -> 'ready' | 'waiting'
-    this.autoClosed = new Set(context.globalState.get(AUTO_CLOSED_KEY, [])); // "<id>:<closedAt>" already moved once
-    this.firstLoad = !carried;
-    this.sessions = [];
-
-    // The Removed list does not outlive VS Code: keep only removals of sessions still running.
-    // A panel reload is not a restart, so it keeps them all.
-    // Saved as [id, removedAt]; versions before 0.7.0 saved bare ids, counted as removed now.
-    const live = readRegistry();
-    const liveIds = new Set(live.map(r => r.sessionId));
-    const removed = context.globalState.get(DISMISSED_KEY, []);
-    const started = Date.now();
-    this.dismissed = new Map();     // sessionId -> when it was removed
-    for (const x of removed) {
-      const [id, at] = Array.isArray(x) ? x : [x, started];
-      if (carried || liveIds.has(id)) this.dismissed.set(id, at || started);
-    }
-    if (this.dismissed.size !== removed.length || removed.some(x => !Array.isArray(x))) void this.saveDismissed();
-
-    // The listed sessions come back after a restart as "not running" rows; a click reopens one.
-    this.known = new Map(carried ? carried.known : []); // sessionId -> { id, cwd, name, since, startedAt }, as last seen
-    this.kept = new Map();        // sessionId -> entry: what the saved list holds
-    this.liveIds = liveIds;       // live at the last refresh
-    this.liveThisRun = new Set(carried ? carried.liveThisRun : []); // seen running since VS Code started
-    this.goneAt = new Map(carried ? carried.goneAt : []); // sessionId -> when a session of this window was first seen stopped
-    let open = context.globalState.get(OPEN_KEY);
-    if (!Array.isArray(open)) open = this.listedBeforeUpgrade(new Set(removed.map(x => (Array.isArray(x) ? x[0] : x))));
-    for (const e of open) if (e && e.id) { this.known.set(e.id, e); this.kept.set(e.id, e); }
-    this.loadFolders();
-  }
-
-  // ---- folders ----
-  // Read fresh before each use: another window may have changed them.
-  loadFolders() {
-    const f = this.context.globalState.get(FOLDERS_KEY) || {};
-    this.folders = (Array.isArray(f.names) ? f.names : []).filter(n => typeof n === 'string' && n);
-    const filed = (Array.isArray(f.filed) ? f.filed : []).filter(x => Array.isArray(x) && x[1] && x[1].entry && this.folders.includes(x[1].folder));
-    this.filed = new Map(filed);  // sessionId -> { folder, entry }
-  }
-  saveFolders() { return this.context.globalState.update(FOLDERS_KEY, { names: this.folders, filed: [...this.filed] }); }
-  folderOf(id) { const f = this.filed.get(id); return f ? f.folder : ''; }
-
-  // Move a session to a folder, or to Main with ''.
-  moveTo(id, folder) {
-    this.loadFolders();
-    const was = this.filed.get(id);
-    if (folder) {
-      const entry = this.known.get(id) || (was && was.entry);
-      if (!entry || !this.folders.includes(folder)) return;
-      this.filed.set(id, { folder, entry });
-    } else {
-      if (!was) return;
-      this.filed.delete(id);
-      this.toMain(id, was.entry);
-    }
-    void this.saveFolders();
-  }
-
-  // A stopped session coming out of a folder joins Main's saved list as a "not running" row, even
-  // one that ended while VS Code ran, which Main would otherwise drop.
-  toMain(id, entry) {
-    if (this.liveIds.has(id) || this.dismissed.has(id)) return;
-    const e = this.known.get(id) || entry;
-    this.known.set(id, e);
-    this.liveThisRun.delete(id);
-    this.goneAt.delete(id);
-    this.kept.set(id, e);
-    void this.saveKept();
-  }
-
-  addFolder(name) {
-    this.loadFolders();
-    if (this.folders.includes(name)) return;
-    this.folders.push(name);
-    void this.saveFolders();
-  }
-  renameFolder(from, to) {
-    this.loadFolders();
-    const i = this.folders.indexOf(from);
-    if (i < 0 || this.folders.includes(to)) return;
-    this.folders[i] = to;
-    for (const f of this.filed.values()) if (f.folder === from) f.folder = to;
-    void this.saveFolders();
-  }
-  // Its sessions go back to Main.
-  deleteFolder(name) {
-    this.loadFolders();
-    this.folders = this.folders.filter(n => n !== name);
-    for (const [id, f] of [...this.filed]) if (f.folder === name) { this.filed.delete(id); this.toMain(id, f.entry); }
-    void this.saveFolders();
-  }
-
-  // Keep each running filed session's copy current, and let go of filed sessions that closed.
-  keepFiled(regs, now) {
-    let changed = false;
-    for (const r of regs) {
-      const f = this.filed.get(r.sessionId);
-      if (!f) continue;
-      const e = this.entryOf(r, now);
-      if (e.name !== f.entry.name || e.cwd !== f.entry.cwd || e.since - f.entry.since > 10 * 60e3) { f.entry = e; changed = true; }
-    }
-    for (const [id, f] of [...this.filed]) {
-      if (this.liveIds.has(id) || !readTranscript({ sessionId: id, cwd: f.entry.cwd }).closed) continue;
-      this.filed.delete(id); changed = true;
-    }
-    if (changed) void this.saveFolders();
-  }
-
-  // The in-memory state a panel reload hands to the next copy (the rest is in globalState).
-  carry() {
-    return {
-      prevStatus: [...this.prevStatus], attention: [...this.attention], known: [...this.known],
-      liveThisRun: [...this.liveThisRun], goneAt: [...this.goneAt],
-    };
-  }
-
-  // First run after an upgrade: nothing saved yet, so rebuild the list from the records stopped
-  // sessions leave in the registry, the ones the panel was showing (recent, not removed, not closed).
-  listedBeforeUpgrade(removed) {
-    const now = Date.now();
-    const out = [];
-    for (const r of readRegistry(true)) {
-      const e = this.entryOf(r, now);
-      if (removed.has(e.id) || now - e.since > UPGRADE_WINDOW_MS || readTranscript(r).closed) continue;
-      out.push(e);
-    }
-    return out;
-  }
-
-  entryOf(r, now) {
-    const since = r.statusUpdatedAt || r.updatedAt || r.startedAt || now;
-    return { id: r.sessionId, cwd: r.cwd || '', name: displayName(r), since, startedAt: r.startedAt || since };
-  }
-
-  // Removed sessions leave the Removed list this long after they were removed. They stay hidden;
-  // new activity still brings one back.
-  clearRemovedAfter() { return (cfg().get('removedClearHours') || 12) * 3600e3; }
-  removedExpired(id, now) { return now - (this.dismissed.get(id) || now) > this.clearRemovedAfter(); }
-
-  saveDismissed() { return this.context.globalState.update(DISMISSED_KEY, [...this.dismissed]); }
-
-  saveKept() {
-    const value = [...this.kept.values()].sort((a, b) => (a.id < b.id ? -1 : 1));
-    return this.context.globalState.update(OPEN_KEY, value);
-  }
-
-  // Whether a session's folder is this window's (a window with no folder owns none).
-  ownedHere(cwd) {
-    const folders = (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath.replace(/\/$/, ''));
-    return !!cwd && folders.some(f => cwd === f || cwd.startsWith(f + '/'));
-  }
-
-  // Stopped while this window kept running: ended on purpose, so not shown as "not running".
-  endedHere(id, cwd) { return this.liveThisRun.has(id) && !this.liveIds.has(id) && this.ownedHere(cwd); }
-
-  // Rebuild the saved list. Running sessions the panel lists are saved as they are now. A stopped
-  // session of this window's folder stays until removed, closed, or ended while VS Code ran.
-  // Another window's stopped sessions are that window's to drop: the saved copy is followed.
-  keep(regs, now) {
-    const stored = new Map((this.context.globalState.get(OPEN_KEY) || []).filter(e => e && e.id).map(e => [e.id, e]));
-    const next = new Map();
-    this.liveIds = new Set(regs.map(r => r.sessionId));
-    for (const r of regs) {
-      const e = this.entryOf(r, now);
-      const status = r.status || 'idle';
-      this.known.set(e.id, e);
-      this.liveThisRun.add(e.id);
-      this.goneAt.delete(e.id);
-      if (!this.dismissed.has(e.id) && !(status === 'idle' && readTranscript(r).closed)) next.set(e.id, e);
-    }
-    const carry = (id, e) => {
-      if (this.liveIds.has(id) || this.dismissed.has(id)) return;
-      if (this.endedHere(id, e.cwd)) {
-        if (!this.goneAt.has(id)) this.goneAt.set(id, now);
-        if (now - this.goneAt.get(id) > ENDED_GRACE_MS) return;
-      }
-      if (readTranscript({ sessionId: id, cwd: e.cwd }).closed) return;
-      if (!this.liveThisRun.has(id)) this.known.set(id, e);
-      next.set(id, e);
-    };
-    for (const [id, e] of this.kept) if (this.ownedHere(e.cwd)) carry(id, e);
-    for (const [id, e] of stored) if (!this.ownedHere(e.cwd)) carry(id, e);
-    this.kept = next;
-    const sorted = m => JSON.stringify([...m.values()].sort((a, b) => (a.id < b.id ? -1 : 1)));
-    if (sorted(next) !== sorted(stored)) void this.saveKept();
-  }
-
-  refresh() {
-    const regs = readRegistry();
-    const trail = readTrail();
-    const now = Date.now();
-    this.loadFolders();
-    // The most recent time each window's folder showed some session: a switch made by
-    // the panel's own click does not always record the old session as hidden, but it
-    // always records the new one as shown.
-    const lastShownIn = cwd => {
-      let latest = 0;
-      for (const s of regs) {
-        const tr = trail.get(s.sessionId);
-        if (tr && sameWindow(s.cwd, cwd) && tr.shownAt > latest) latest = tr.shownAt;
-      }
-      return latest;
-    };
-    const seen = new Set();
-    for (const r of regs) {
-      const id = r.sessionId;
-      seen.add(id);
-      const status = r.status || 'idle';
-      const prev = this.prevStatus.get(id);
-      const t = readTranscript(r);
-      if (status === 'idle' && t.closed) {
-        // anything-left said "Good to close": done, not waiting on you.
-        this.attention.delete(id);
-        this.prevStatus.set(id, status);
-        const key = `${id}:${t.closedAt}`;
-        if (!this.autoClosed.has(key)) {
-          const seenShown = trail.get(id);
-          // Left it: VS Code hid it after the close, or another session in its window
-          // has been shown since both the close and its own last showing.
-          const leftIt = seenShown
-            ? (!seenShown.shown && seenShown.hiddenAt >= t.closedAt) ||
-              lastShownIn(r.cwd) > Math.max(t.closedAt, seenShown.shownAt)
-            : now - t.closedAt > NO_TRAIL_CLOSE_MS;
-          if (leftIt) { this.dismiss(id); this.markAutoClosed(key); }
-        }
-        continue;
-      }
-      if (status === 'busy') {
-        this.attention.delete(id);
-        if (prev !== undefined && prev !== 'busy') this.undismiss(id);
-      } else if (status === 'waiting') {
-        if (this.attention.get(id) !== 'waiting') {
-          this.attention.set(id, 'waiting');
-          this.undismiss(id);
-          if (!this.firstLoad) playSound('waiting');
-        }
-      } else if (status === 'idle' && prev === 'busy') {
-        this.attention.set(id, 'ready');
-        this.undismiss(id);
-        if (!this.folderOf(id)) playSound('ready'); // a filed session's ready is a quiet dot on its tab
-      }
-      this.prevStatus.set(id, status);
-    }
-    for (const id of [...this.prevStatus.keys()]) {
-      if (!seen.has(id)) { this.prevStatus.delete(id); this.attention.delete(id); }
-    }
-    this.firstLoad = false;
-    this.sessions = regs;
-    this.keep(regs, now);
-    this.keepFiled(regs, now);
-  }
-
-  markAutoClosed(key) {
-    this.autoClosed.add(key);
-    const keep = [...this.autoClosed].slice(-300);
-    this.autoClosed = new Set(keep);
-    void this.context.globalState.update(AUTO_CLOSED_KEY, keep);
-  }
-
-  undismiss(id) {
-    if (!this.dismissed.delete(id)) return;
-    void this.saveDismissed();
-    const e = this.known.get(id);
-    if (e && !this.liveIds.has(id)) { this.kept.set(id, e); void this.saveKept(); }
-  }
-  // Removing a session also takes it out of its folder; brought back, it returns to Main.
-  dismiss(id) {
-    this.dismissed.set(id, Date.now()); this.attention.delete(id); void this.saveDismissed();
-    if (this.kept.delete(id)) void this.saveKept();
-    this.loadFolders();
-    if (this.filed.delete(id)) void this.saveFolders();
-  }
-  restore(id) { this.undismiss(id); }
-  ack(id) { this.attention.delete(id); }
-  // The star: mark a running session green again to come back to it, or clear that mark.
-  // Clicking the row clears it like any green; a session that needs you stays blue.
-  toggleMark(id) {
-    if (!this.liveIds.has(id)) return;
-    const reg = this.sessions.find(r => r.sessionId === id);
-    if (reg && reg.status === 'busy') return; // running: it turns green by itself when the turn ends
-    const a = this.attention.get(id);
-    if (a === 'ready') this.attention.delete(id);
-    else if (!a) this.attention.set(id, 'ready');
-  }
-
-  inThisWindow(cwd) {
-    const folders = (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath);
-    if (!folders.length || !cwd) return true;
-    return folders.some(f => cwd === f || cwd.startsWith(f.replace(/\/$/, '') + '/'));
-  }
-
-  offlineRow(e, dismissed) {
-    return {
-      id: e.id, pid: null, name: displayName({ sessionId: e.id, cwd: e.cwd, name: e.name }), cwd: e.cwd,
-      repo: path.basename(e.cwd) || '?', status: 'offline', attention: null, dismissed,
-      waitingFor: '', since: e.since, startedAt: e.startedAt || e.since, closed: false, folder: this.folderOf(e.id),
-    };
-  }
-
-  view(showAll) {
-    const now = Date.now();
-    const rows = [];
-    for (const e of this.known.values()) {
-      if (this.liveIds.has(e.id) || this.endedHere(e.id, e.cwd)) continue;
-      const dismissed = this.dismissed.has(e.id);
-      if (!dismissed && !this.kept.has(e.id)) continue;
-      if (dismissed && this.removedExpired(e.id, now)) continue;
-      if (!showAll && !this.inThisWindow(e.cwd)) continue;
-      rows.push(this.offlineRow(e, dismissed));
-    }
-    for (const r of this.sessions) {
-      const id = r.sessionId;
-      const status = r.status || 'idle';
-      const attention = this.attention.get(id) || null;
-      const dismissed = this.dismissed.has(id);
-      if (!showAll && !this.inThisWindow(r.cwd)) continue;
-      const since = r.statusUpdatedAt || r.updatedAt || r.startedAt || now;
-      if (dismissed && this.removedExpired(id, now)) continue;
-      rows.push({
-        id, pid: r.pid, name: displayName(r), cwd: r.cwd || '',
-        repo: path.basename(r.cwd || '') || '?', status, attention, dismissed,
-        waitingFor: r.waitingFor || '', since, startedAt: r.startedAt || since,
-        closed: status === 'idle' && readTranscript(r).closed, folder: this.folderOf(id),
-        cost: attention === 'ready' ? replyCost(readTranscript(r).reply) : null,
-      });
-    }
-    // Filed sessions no list above holds (ended here, or another window's): shown from the folder's copy.
-    const listed = new Set(rows.map(x => x.id));
-    for (const [id, f] of this.filed) {
-      if (listed.has(id) || this.liveIds.has(id) || this.dismissed.has(id)) continue;
-      if (!showAll && !this.inThisWindow(f.entry.cwd)) continue;
-      rows.push(this.offlineRow(f.entry, false));
-    }
-    const rank = x => x.attention === 'waiting' ? 0 : x.attention === 'ready' ? 1 : x.status === 'busy' ? 2 : x.closed ? 4 : 3;
-    // Ready sessions: the one that takes least of your time first.
-    const minutes = x => (x.cost ? x.cost.minutes : 0);
-    rows.sort((a, b) => rank(a) - rank(b) || minutes(a) - minutes(b) || b.since - a.since);
-    return rows;
-  }
-}
-
 // ---- webview ----------------------------------------------------------------
 
 class Provider {
-  constructor(context, tracker, rootUri, carried) {
+  constructor(context, list, rootUri, carried) {
     this.context = context;
-    this.tracker = tracker;
+    this.list = list;
     this.rootUri = rootUri;
     this.view = null;
     this.listeners = [];
@@ -664,8 +180,7 @@ class Provider {
 
   // VS Code's input box: webviews cannot open prompts of their own.
   askFolderName(title, value) {
-    const t = this.tracker;
-    t.loadFolders();
+    const names = this.list.folderNames;
     return vscode.window.showInputBox({
       title, value, prompt: 'Folder name',
       validateInput: v => {
@@ -673,40 +188,39 @@ class Provider {
         if (!n) return 'Give the folder a name';
         if (n.length > 40) return 'Keep it under 40 characters';
         if (/^main$/i.test(n)) return 'Main is the list of sessions not in any folder';
-        if (n !== value && t.folders.some(f => f.toLowerCase() === n.toLowerCase())) return 'There is already a folder by that name';
+        if (n !== value && names.some(f => f.toLowerCase() === n.toLowerCase())) return 'There is already a folder by that name';
         return null;
       },
     }).then(v => (v === undefined ? undefined : v.trim()));
   }
 
   async onFolderMessage(m) {
-    const t = this.tracker;
+    const list = this.list;
     switch (m.type) {
       case 'showFolder': this.showFolder(m.folder); break;
-      case 'move': t.moveTo(m.id, m.folder || ''); break;
+      case 'move': list.act({ type: 'move', id: m.id, folder: m.folder || '' }); break;
       case 'newFolder': {
         const name = await this.askFolderName(m.id ? 'New folder for this session' : 'New folder');
         if (!name) return;
-        t.addFolder(name);
-        if (m.id) t.moveTo(m.id, name); else this.showFolder(name);
+        list.act({ type: 'addFolder', name });
+        if (m.id) list.act({ type: 'move', id: m.id, folder: name }); else this.showFolder(name);
         break;
       }
       case 'renameFolder': {
         const name = await this.askFolderName(`Rename folder "${m.folder}"`, m.folder);
         if (!name || name === m.folder) return;
-        t.renameFolder(m.folder, name);
+        list.act({ type: 'renameFolder', name: m.folder, to: name });
         if (this.viewFolder === m.folder) this.showFolder(name);
         break;
       }
       case 'deleteFolder': {
-        t.loadFolders();
-        const n = [...t.filed.values()].filter(f => f.folder === m.folder).length;
+        const n = list.filedIn(m.folder);
         const ok = await vscode.window.showWarningMessage(
           `Delete the folder "${m.folder}"?`,
           { modal: true, detail: n ? `Its ${n} session${n === 1 ? '' : 's'} go${n === 1 ? 'es' : ''} back to Main.` : 'It is empty.' },
           'Delete');
         if (ok !== 'Delete') return;
-        t.deleteFolder(m.folder);
+        list.act({ type: 'deleteFolder', name: m.folder });
         if (this.viewFolder === m.folder) this.showFolder('');
         break;
       }
@@ -732,18 +246,15 @@ class Provider {
   }
 
   async onMessage(m) {
-    const t = this.tracker;
+    const list = this.list;
     switch (m.type) {
       case 'focus': {
-        t.ack(m.id);
+        list.act({ type: 'ack', id: m.id });
         try { await openSession(m.id); }
         catch (e) { vscode.window.showWarningMessage(`Claude Sessions: could not focus session (${e.message}).`); }
         break;
       }
-      case 'ack': t.ack(m.id); break;
-      case 'mark': t.toggleMark(m.id); break;
-      case 'dismiss': t.dismiss(m.id); break;
-      case 'restore': t.restore(m.id); break;
+      case 'ack': case 'mark': case 'dismiss': case 'restore': list.act({ type: m.type, id: m.id }); break;
       case 'toggleAll': this.toggleAll(); return;
       case 'toggleDismissed': this.showDismissed = !this.showDismissed; break;
       case 'ready': break;
@@ -760,12 +271,12 @@ class Provider {
   }
 
   push() {
-    const rows = this.tracker.view(this.showAll);
+    const rows = this.list.rows(this.showAll);
     const live = rows.filter(r => !r.dismissed);
     writeSnapshot(live, this.showAll);
     // A filed session counts only when it needs you; its ready shows as a dot on its folder's tab.
     const needing = live.filter(r => r.attention === 'waiting' || (r.attention && !r.folder)).length;
-    const folders = this.tracker.folders;
+    const folders = this.list.folderNames;
     if (this.viewFolder && !folders.includes(this.viewFolder)) this.showFolder('');
     if (this.view) {
       this.view.badge = needing ? { value: needing, tooltip: `${needing} Claude session${needing === 1 ? '' : 's'} need${needing === 1 ? 's' : ''} you` } : undefined;
@@ -841,15 +352,6 @@ function html(webview, rootUri) {
 
 function trailDir() { return path.join(os.homedir(), '.claude', 'session-trail'); }
 
-// Whether two session folders belong to the same VS Code window: both inside this
-// window's workspace, or, for another window's sessions, the same folder.
-function sameWindow(a, b) {
-  const folders = (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath.replace(/\/$/, ''));
-  const inHere = c => !!c && folders.some(f => c === f || c.startsWith(f + '/'));
-  if (inHere(a) || inHere(b)) return inHere(a) && inHere(b);
-  return !!a && a === b;
-}
-
 function readTrail() {
   const out = new Map();
   let files = [];
@@ -864,17 +366,17 @@ function readTrail() {
 }
 
 class History {
-  constructor(tracker) { this.tracker = tracker; this.walk = null; }
+  constructor(look, list, scope) { this.look = look; this.list = list; this.scope = scope; this.walk = null; }
 
   // This window's live sessions that VS Code has shown, most recently shown first.
   ordered() {
-    this.tracker.refresh();
-    const live = new Map(this.tracker.sessions.map(s => [s.sessionId, s]));
+    this.look();
+    const live = new Map(this.list.running().map(s => [s.sessionId, s]));
     const trail = readTrail();
     const rows = [];
     for (const [id, t] of trail) {
       const s = live.get(id);
-      if (!s || !this.tracker.inThisWindow(s.cwd || t.cwd)) continue;
+      if (!s || !this.scope.shows(s.cwd || t.cwd)) continue;
       rows.push({ id, name: displayName(s), shown: !!t.shown, shownAt: t.shownAt });
     }
     rows.sort((a, b) => b.shownAt - a.shownAt);
@@ -967,13 +469,20 @@ function start(host) {
   const { context } = host;
   extensionRoot = host.root;
   const subs = [];
-  const tracker = new Tracker(context, host.carried);
-  const provider = new Provider(context, tracker, vscode.Uri.file(host.root), host.carried);
-  const history = new History(tracker);
+  const scope = windowScope(() => (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath));
+  const list = new SessionList({
+    store: context.globalState, transcripts, scope, now: () => Date.now(),
+    removedClearMs: () => (cfg().get('removedClearHours') || 12) * 3600e3,
+    live: readRegistry(), ended: () => readRegistry(true),
+  }, host.carried);
+  // A look at the registry and the trail; plays the sounds the changes call for.
+  const look = () => { for (const kind of list.observe(readRegistry(), readTrail())) playSound(kind); };
+  const provider = new Provider(context, list, vscode.Uri.file(host.root), host.carried);
+  const history = new History(look, list, scope);
   subs.push({ dispose: () => provider.detach() });
 
   let timer = null;
-  const tick = () => { tracker.refresh(); provider.push(); };
+  const tick = () => { look(); provider.push(); };
   const schedule = () => { if (timer) clearTimeout(timer); timer = setTimeout(tick, 150); };
 
   tick();
@@ -1010,7 +519,7 @@ function start(host) {
     attach: view => provider.resolveWebviewView(view),
     stop() {
       for (const s of subs.splice(0)) { try { s.dispose(); } catch { /* keep going */ } }
-      return { ...tracker.carry(), showDismissed: provider.showDismissed };
+      return { ...list.handOver(), showDismissed: provider.showDismissed };
     },
   };
 }
