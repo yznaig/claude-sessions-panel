@@ -98,7 +98,8 @@ function replyCost(text) {
   const words = (text.match(/\S+/g) || []).length;
   const prose = text.replace(/```[\s\S]*?```/g, ' ');
   const decisions = (prose.match(/^\d{1,2}[.)]\s/gm) || []).length;
-  return { words, decisions, minutes: words / WORDS_PER_MIN + decisions * MIN_PER_DECISION };
+  const readMinutes = words / WORDS_PER_MIN, decideMinutes = decisions * MIN_PER_DECISION;
+  return { words, decisions, readMinutes, decideMinutes, minutes: readMinutes + decideMinutes };
 }
 const CLOSE_SKILL = 'anything-left';
 const CLOSE_REPLY = /^[\s*_>#]*good to close\b/i;

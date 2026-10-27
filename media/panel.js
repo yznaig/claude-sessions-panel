@@ -82,8 +82,8 @@
     const c = r.cost;
     const chip = el('span', 'chip', minutesText(c.minutes) + (c.decisions ? ' · ' + plural(c.decisions, 'decision') : ''));
     chip.style.background = heat(c.minutes);
-    chip.title = `Your time, roughly: ${plural(c.words, 'word')} to read (${(c.words / 230).toFixed(1)} min)` +
-      (c.decisions ? ` + ${plural(c.decisions, 'numbered item')} to decide (${(c.decisions * 0.75).toFixed(1)} min)` : '');
+    chip.title = `Your time, roughly: ${plural(c.words, 'word')} to read (${c.readMinutes.toFixed(1)} min)` +
+      (c.decisions ? ` + ${plural(c.decisions, 'numbered item')} to decide (${c.decideMinutes.toFixed(1)} min)` : '');
     return chip;
   }
 
