@@ -25,6 +25,12 @@
     if (r.status === 'waiting') return 'needs you';
     return 'idle';
   }
+  function clock(ms) {
+    if (!ms) return '?';
+    const d = new Date(ms), now = new Date();
+    const t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return d.toDateString() === now.toDateString() ? t : d.toLocaleDateString([], { weekday: 'short' }) + ' ' + t;
+  }
   function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
 
   // ---- pop-up menu (the ⋯ button and right-click) ----
@@ -177,6 +183,14 @@
     const dis = el('button', state.showDismissed ? 'on' : '', 'Removed (' + gone.length + ')');
     dis.addEventListener('click', () => post({ type: 'toggleDismissed' }));
     bar.appendChild(dis);
+    // The moon: you're away for a long stretch or overnight. Clicking any session turns it off.
+    const away = state.away && state.away.away;
+    const moon = el('button', 'moon' + (away ? ' on' : ''), away ? '🌙 Away since ' + clock(state.away.since) : '🌙');
+    moon.title = away
+      ? 'You are marked away. Click to mark yourself back; clicking any session does too.'
+      : 'Mark yourself away (a long stretch or overnight). Clicking any session marks you back.';
+    moon.addEventListener('click', () => post({ type: 'toggleAway' }));
+    bar.appendChild(moon);
     bar.appendChild(el('span', '', state.soundOn ? '🔔 sounds on' : '🔕 sounds off'));
     list.replaceChildren();
     if (!shown.length) {

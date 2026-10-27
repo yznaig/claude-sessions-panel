@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.15.0 — 2026-10-26
+A **🌙 moon** in the top bar marks you away (a long stretch or overnight). It writes `~/.claude/sessions-panel/away.json` with the time it went on, for other sessions to read; click it again, or click any session or star in the panel, to mark yourself back.
+
 ## 0.14.0 — 2026-10-26
 No change in what the panel does. Inside: a test suite (`npm test`, about 40 checks through the real code), and the session tracking moved out of `core.js` into `sessions.js`, where each saved list (Removed, the restart list, folders) has one owner, with `transcript.js` and `window.js` beside it.
 

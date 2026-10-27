@@ -65,3 +65,8 @@ h4 { margin: 10px 0 4px; font-weight: 600; color: var(--vscode-descriptionForegr
 .row .star { border: none; opacity: 0; padding: 0 2px; font-size: 1em; color: var(--vscode-testing-iconPassed, #73c991); }
 .row:hover .star { opacity: 0.8; }
 .row .star:hover { opacity: 1; }
+
+/* the moon: away for a long stretch */
+#bar button.moon { border-color: transparent; opacity: 0.6; }
+#bar button.moon:hover { opacity: 1; }
+#bar button.moon.on { opacity: 1; border-color: var(--vscode-charts-purple, #b180d7); background: color-mix(in srgb, var(--vscode-charts-purple, #b180d7) 18%, transparent); }

@@ -415,3 +415,47 @@ withHarness('folders changed by another window: tabs and filing agree in the ver
   h.answers.push('f'); await h.send({ type: 'newFolder' });
   same(h.state.folders, ['F'], 'same name in another case refused');
 });
+
+// ---- the moon: away ----------------------------------------------------------
+
+const awayFile = h => require('path').join(h.home, '.claude/sessions-panel/away.json');
+const readJson = f => JSON.parse(require('fs').readFileSync(f, 'utf8'));
+
+withHarness('moon: off by default; on writes away.json with when it went on', async h => {
+  h.start();
+  same(h.state.away, { away: false, since: null });
+  await h.send({ type: 'toggleAway' });
+  const a = readJson(awayFile(h));
+  eq(a.away, true); eq(a.since, h.now); eq(a.sinceIso, new Date(h.now).toISOString()); eq(a.how, 'moon');
+  same(h.state.away, { away: true, since: h.now });
+  await h.send({ type: 'toggleAway' });
+  eq(readJson(awayFile(h)).away, false); eq(h.state.away.away, false);
+});
+
+withHarness('moon: clicking a session or its star means you are back', async h => {
+  const a = h.session('a');
+  h.start();
+  await h.send({ type: 'toggleAway' }); h.advance(8 * H);
+  await h.send({ type: 'focus', id: a.id });
+  const f = readJson(awayFile(h));
+  eq(f.away, false); eq(f.how, 'clicked a session'); eq(f.changedAt, h.now);
+  await h.send({ type: 'toggleAway' });
+  await h.send({ type: 'mark', id: a.id });
+  eq(readJson(awayFile(h)).away, false);
+});
+
+withHarness('moon: removing or folder moves do not count as coming back', async h => {
+  const a = h.session('a');
+  h.start();
+  await h.send({ type: 'toggleAway' });
+  await h.send({ type: 'dismiss', id: a.id }); await h.send({ type: 'restore', id: a.id });
+  eq(readJson(awayFile(h)).away, true);
+});
+
+withHarness("moon: set in another window, it shows here on the next update", async h => {
+  h.start();
+  require('fs').mkdirSync(require('path').dirname(awayFile(h)), { recursive: true });
+  require('fs').writeFileSync(awayFile(h), JSON.stringify({ away: true, since: 123 }));
+  h.step();
+  same(h.state.away, { away: true, since: 123 });
+});

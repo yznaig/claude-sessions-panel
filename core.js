@@ -61,6 +61,7 @@ const transcripts = require('./transcript');
 const { displayName } = transcripts;
 const { SessionList } = require('./sessions');
 const { windowScope } = require('./window');
+const { readAway, writeAway } = require('./away');
 
 // ---- sound ------------------------------------------------------------------
 
@@ -228,6 +229,13 @@ class Provider {
     }
   }
 
+  // The moon (away.js): you're away for a long stretch. Clicking a session, or its star, means you're back.
+  setAway(on, how) {
+    try { writeAway(on, how); }
+    catch (e) { vscode.window.showWarningMessage(`Claude Sessions: could not save the away state (${e.message}).`); }
+  }
+  back() { if (readAway().away) this.setAway(false, 'clicked a session'); }
+
   // Called by extension.js with the panel's view, when VS Code first shows it or after a reload.
   resolveWebviewView(view) {
     this.detach();
@@ -250,12 +258,15 @@ class Provider {
     const list = this.list;
     switch (m.type) {
       case 'focus': {
+        this.back();
         list.act({ type: 'ack', id: m.id });
         try { await openSession(m.id); }
         catch (e) { vscode.window.showWarningMessage(`Claude Sessions: could not focus session (${e.message}).`); }
         break;
       }
-      case 'ack': case 'mark': case 'dismiss': case 'restore': list.act({ type: m.type, id: m.id }); break;
+      case 'mark': this.back(); list.act({ type: m.type, id: m.id }); break;
+      case 'ack': case 'dismiss': case 'restore': list.act({ type: m.type, id: m.id }); break;
+      case 'toggleAway': this.setAway(!readAway().away, 'moon'); break;
       case 'toggleAll': this.toggleAll(); return;
       case 'toggleDismissed': this.showDismissed = !this.showDismissed; break;
       case 'ready': break;
@@ -285,7 +296,7 @@ class Provider {
       void this.view.webview.postMessage({
         type: 'state', rows, showAll: this.showAll, showDismissed: this.showDismissed,
         folders, viewFolder: this.viewFolder,
-        soundOn: !!cfg().get('sound.enabled'), now: Date.now(),
+        soundOn: !!cfg().get('sound.enabled'), now: Date.now(), away: readAway(),
         window: (vscode.workspace.workspaceFolders || []).map(f => path.basename(f.uri.fsPath)).join(', ') || 'no folder',
       });
     }
