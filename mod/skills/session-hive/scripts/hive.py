@@ -5,6 +5,8 @@
   receive --from NAME [...]       decide whether an incoming peer message is delivered now or waits
   held   [--take]                 the notes that waited for this session (and, with --take, clear them)
   sent   --to NAME                log a message this session sent (text on stdin)
+  claim  --path FILE              record that this session is editing FILE, or refuse once if another live
+                                  session has been editing it within the hour
   log    [--hours N]              the message log, newest last
 
 Everything is derived from what Claude Code already keeps: the process registry
@@ -27,9 +29,14 @@ SNAPSHOTS = os.path.join(HOME, '.claude', 'sessions-panel')
 
 LIST_CAP = 8                 # sessions shown at startup
 TOKEN_LIMIT = 400_000        # don't wake a session whose context is past this
-USAGE_LIMIT = 75             # don't wake any session once a usage window is this full (percent)
+USAGE_LIMIT = 75             # don't wake any session once the five-hour usage window is this full (percent)
+WEEK_WARNING = 75            # past this, the startup list notes the weekly window (it never holds a message)
 LOOP_LIMIT = 3               # messages one session may deliver to another per hour; the rest wait
 RECENT_FILES_SECONDS = 2 * 3600
+CLAIMS = os.path.join(HIVE, 'claims.json')
+CLAIM_SECONDS = 3600         # a claim lapses an hour after its holder's last edit
+RETRY_SECONDS = 600          # after a refusal, an edit of the same file within this goes through
+UNCLAIMED = ('/tmp/', '/proc/', '/dev/')
 
 RULES = """## Other sessions (session hive)
 Other Claude Code sessions are live on this machine. The ones in this workspace are listed below.
@@ -214,6 +221,8 @@ def cmd_peers(a):
     out = [RULES.replace('{script}', os.path.abspath(__file__))]
     if me:
         out.append(f"\nYou are **{me.get('name')}**.")
+    if a.week is not None and a.week >= WEEK_WARNING:
+        out.append(f'The weekly usage window is {a.week:g}% used: keep messages to other sessions to what matters.')
     if not shown:
         out.append('\nNo other live sessions in this workspace.')
     else:
@@ -271,7 +280,7 @@ def cmd_receive(a):
         elif a.tokens and a.tokens > TOKEN_LIMIT:
             reason = f'this session is long ({kilo(a.tokens)} tokens)'
         elif a.usage is not None and a.usage >= USAGE_LIMIT:
-            reason = f'the usage window is {a.usage:g}% used'
+            reason = f'the five-hour usage window is {a.usage:g}% used'
     action = 'hold' if reason else 'deliver'
     rec = {'at': now, 'dir': 'in', 'from': sender, 'to': my_name, 'action': action,
            'reason': reason, 'busy': bool(a.busy), 'away': away(), 'first': first_line(text)}
@@ -312,6 +321,52 @@ def cmd_sent(a):
     return 0
 
 
+def cmd_claim(a):
+    """Prints one JSON line: {"action": "allow"} or {"action": "refuse", "message": ...}."""
+    import fcntl
+    path = os.path.abspath(a.path)
+    if path.startswith(UNCLAIMED):
+        print(json.dumps({'action': 'allow'}))
+        return 0
+    reg = registry()
+    me = find_self(reg, a.self) or {}
+    my_id, my_name = me.get('sessionId', a.self or '?'), me.get('name', a.self or '?')
+    live = {r.get('sessionId') for r in reg.values()}
+    now = time.time()
+    os.makedirs(HIVE, exist_ok=True)
+    with open(CLAIMS + '.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            with open(CLAIMS) as f:
+                state = json.load(f)
+        except (OSError, ValueError):
+            state = {}
+        # Lapsed claims, claims of ended sessions and stale refusals drop out.
+        claims = {p: c for p, c in state.get('claims', {}).items()
+                  if now - c.get('at', 0) < CLAIM_SECONDS and c.get('sessionId') in live}
+        refused = {k: t for k, t in state.get('refused', {}).items() if now - t < RETRY_SECONDS}
+        c = claims.get(path)
+        verdict = {'action': 'allow'}
+        key = my_id + ' ' + path
+        if c and c.get('sessionId') != my_id and key not in refused:
+            refused[key] = now
+            mins = max(1, round((now - c['at']) / 60))
+            verdict = {'action': 'refuse', 'holder': c.get('name'), 'message': (
+                f"[session hive] {c.get('name')} has been editing {path} (last edit {mins} min ago). "
+                f"Message {c.get('name')} first with SendMessage: say what you are about to change and why. "
+                f"Then retry this edit; a retry within {RETRY_SECONDS // 60} minutes goes through.")}
+        else:
+            claims[path] = {'sessionId': my_id, 'name': my_name, 'at': now}
+        tmp = CLAIMS + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump({'claims': claims, 'refused': refused}, f)
+        os.replace(tmp, CLAIMS)
+    if verdict['action'] == 'refuse':
+        append(LOG, {'at': now, 'dir': 'claim', 'from': my_name, 'to': verdict['holder'], 'first': path})
+    print(json.dumps({k: v for k, v in verdict.items() if k != 'holder'}))
+    return 0
+
+
 def cmd_log(a):
     from datetime import datetime
     now = time.time()
@@ -319,7 +374,9 @@ def cmd_log(a):
         if now - r.get('at', 0) > a.hours * 3600:
             continue
         stamp = datetime.fromtimestamp(r['at']).strftime('%m-%d %H:%M')
-        if r.get('dir') == 'out':
+        if r.get('dir') == 'claim':
+            print(f"{stamp}  {r.get('from')} was asked to message {r.get('to')} before editing {r.get('first')}")
+        elif r.get('dir') == 'out':
             print(f"{stamp}  {r.get('from')} → {r.get('to')}  sent: {r.get('first')}")
         else:
             what = 'delivered' if r.get('action') == 'deliver' else f"waited ({r.get('reason')})"
@@ -332,14 +389,16 @@ def main():
     ap.add_argument('--self', help='this session (id prefix or ListAgents name); found from the process tree if left out')
     sub = ap.add_subparsers(dest='cmd', required=True)
     p = sub.add_parser('peers'); p.add_argument('--cwd'); p.add_argument('--all', action='store_true')
+    p.add_argument('--week', type=float, help='the weekly usage window, percent')
     p = sub.add_parser('receive'); p.add_argument('--from', dest='sender')
     p.add_argument('--busy', type=int, default=0); p.add_argument('--tokens', type=int)
-    p.add_argument('--usage', type=float, help='the fullest usage window, percent')
+    p.add_argument('--usage', type=float, help='the five-hour usage window, percent')
     p = sub.add_parser('held'); p.add_argument('--take', action='store_true')
     p = sub.add_parser('sent'); p.add_argument('--to', required=True)
+    p = sub.add_parser('claim'); p.add_argument('--path', required=True)
     p = sub.add_parser('log'); p.add_argument('--hours', type=float, default=24)
     a = ap.parse_args()
-    return {'peers': cmd_peers, 'receive': cmd_receive, 'held': cmd_held, 'sent': cmd_sent, 'log': cmd_log}[a.cmd](a)
+    return {'peers': cmd_peers, 'receive': cmd_receive, 'held': cmd_held, 'sent': cmd_sent, 'claim': cmd_claim, 'log': cmd_log}[a.cmd](a)
 
 
 if __name__ == '__main__':

@@ -1,7 +1,7 @@
 {
   "name": "session-trail",
-  "version": "0.3.0",
-  "description": "Companion to the Claude Sessions panel: records when VS Code shows or hides each session (for the panel's Alt+Q history); the read-sessions skill, which finds and reads your other sessions; and the session hive, which tells each session who else is live in its workspace, marks messages from other sessions as not the user's word, and keeps them from waking long, parked or over-limit sessions.",
+  "version": "0.4.0",
+  "description": "Companion to the Claude Sessions panel: records when VS Code shows or hides each session (for the panel's Alt+Q history); the read-sessions skill, which finds and reads your other sessions; and the session hive, which tells each session who else is live in its workspace, marks messages from other sessions as not the user's word, and keeps them from waking long, parked or over-limit sessions, and asks a session to message whoever has been editing a file before it edits that file too.",
   "author": {
     "name": "yznaig"
   }

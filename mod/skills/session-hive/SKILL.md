@@ -24,6 +24,7 @@ Reading the list:
 
 How messages are handled (the hooks in this plugin; nothing to do by hand):
 - Every incoming message from another session starts with a reminder that it is not the user's word.
-- An idle session is not woken when its context is past 400k tokens, when a usage window is 75% used, or when it is parked. The message waits and reaches the session with the user's next prompt.
+- An idle session is not woken when its context is past 400k tokens, when the five-hour usage window is 75% used, or when it is parked. The message waits and reaches the session with the user's next prompt. A weekly window past 75% only shows as a warning in the list.
+- **File claims.** A session's edit of a file (Edit, Write, NotebookEdit) claims it for an hour after its last edit. When another live session edits that file inside the hour, its first try is refused with the holder's name: message the holder with what you are about to change and why, then retry; a retry within 10 minutes goes through. Shell commands that write files are not checked, so prefer the edit tools on shared files. Files under `/tmp/` are never claimed.
 - A fourth message from the same session within an hour waits too, busy or not.
 - Every message in and out is logged to `~/.claude/session-hive/log.ndjson`. Held messages are in `~/.claude/session-hive/held/<session id>.ndjson`.

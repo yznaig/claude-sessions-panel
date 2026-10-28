@@ -6,10 +6,11 @@ import { expect, test } from 'claude-code/testing'
 type Call = { argv: readonly string[]; stdin: string }
 
 function world(on: any, answer: (argv: readonly string[]) => { exitCode?: number; stdout?: string }) {
-  const w = { calls: [] as Call[], received: [] as string[], submitted: [] as { text: string; context?: readonly string[] }[], tokens: 50000, usage: 20 }
+  const w = { calls: [] as Call[], received: [] as string[], submitted: [] as { text: string; context?: readonly string[] }[], tokens: 50000, usage: 20, edits: [] as string[] }
   on('session.id', () => ({ value: 's1' }))
   on('session.cwd', () => ({ value: '/work/repo' }))
-  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: w.tokens, window: 1000000 }, rateLimits: [{ kind: 'five_hour', percentUsed: w.usage }] } }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: w.tokens, window: 1000000 }, rateLimits: [{ kind: 'five_hour', percentUsed: w.usage }, { kind: 'seven_day', percentUsed: 88 }] } }))
+  on('tool.call', (_: unknown, e: { tool: string }) => { w.edits.push(e.tool); return { result: 'ok' } })
   on('process.run', (_: unknown, e: { argv: readonly string[]; init?: { stdin?: string } }) => {
     w.calls.push({ argv: e.argv, stdin: e.init?.stdin ?? '' })
     const a = answer(e.argv)
@@ -96,4 +97,32 @@ test('a message this session sends is logged', async ($, on) => {
   expect(sub(w.calls[0]!.argv)).toBe('sent')
   expect(w.calls[0]!.argv).toContain('api-b8')
   expect(w.calls[0]!.stdin).toBe('FYI: TICKET-11 queued')
+})
+
+test('only the five-hour window is handed over for holding; the weekly one goes to the list', async ($, on) => {
+  const w = world(on, argv => ({ stdout: sub(argv) === 'receive' ? JSON.stringify({ action: 'deliver', text: 'x' }) : 'list' }))
+  await $.session.receive({ origin: { kind: 'peer' }, text: ENVELOPE })
+  expect(w.calls[0]!.argv.join(' ')).toContain('--usage 20')
+  expect(w.calls[0]!.argv.join(' ')).not.toContain('88')
+  await $.prompt.context({ blocks: [] })
+  expect(w.calls[1]!.argv.join(' ')).toContain('--week 88')
+})
+
+test('an edit of a file another session holds is refused with hive.py\'s message', async ($, on) => {
+  const w = world(on, () => ({ stdout: JSON.stringify({ action: 'refuse', message: '[session hive] api-b8 has been editing /work/repo/a.md' }) }))
+  const r = await $.tool.call({ tool: 'Edit', file_path: '/work/repo/a.md', old_string: 'a', new_string: 'b' })
+  expect(JSON.stringify(r)).toContain('api-b8 has been editing')
+  expect(w.edits).toEqual([])
+  expect(w.calls[0]!.argv.join(' ')).toContain('claim --path /work/repo/a.md')
+})
+
+test('an unclaimed edit, a notebook edit, and an edit whose check failed all go through', async ($, on) => {
+  let fail = false
+  const w = world(on, () => (fail ? { exitCode: 1 } : { stdout: JSON.stringify({ action: 'allow' }) }))
+  await $.tool.call({ tool: 'Write', file_path: '/work/repo/b.md', content: 'x' })
+  await $.tool.call({ tool: 'NotebookEdit', notebook_path: '/work/repo/n.ipynb', new_source: 'x' } as any)
+  fail = true
+  await $.tool.call({ tool: 'Edit', file_path: '/work/repo/c.md', old_string: 'a', new_string: 'b' })
+  expect(w.edits).toEqual(['Write', 'NotebookEdit', 'Edit'])
+  expect(w.calls.map(c => c.argv[c.argv.length - 1])).toEqual(['/work/repo/b.md', '/work/repo/n.ipynb', '/work/repo/c.md'])
 })

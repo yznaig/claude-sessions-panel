@@ -49,9 +49,28 @@ async function measures($: EngineInterface): Promise<string[]> {
   const u = await $.session.usage()
   const out: string[] = []
   if (u.context?.tokens) out.push('--tokens', String(u.context.tokens))
-  const fullest = Math.max(-1, ...(u.rateLimits ?? []).map(l => l.percentUsed))
-  if (fullest >= 0) out.push('--usage', String(fullest))
+  // Only the five-hour window holds wakes: it resets within hours, so a held
+  // note never sits for days. The weekly window is a warning in the list.
+  const fiveHour = (u.rateLimits ?? []).find(l => l.kind === 'five_hour')
+  if (fiveHour) out.push('--usage', String(fiveHour.percentUsed))
   return out
+}
+
+async function weekly($: EngineInterface): Promise<string[]> {
+  const week = ((await $.session.usage()).rateLimits ?? []).find(l => l.kind === 'seven_day')
+  return week ? ['--week', String(week.percentUsed)] : []
+}
+
+// A file edit's claim check: a refusal to hand back, or undefined to go on.
+async function claimRefusal($: EngineInterface, path: string | undefined): Promise<{ deny: string } | undefined> {
+  if (!path) return undefined
+  try {
+    const verdict = JSON.parse(await hive($, ['claim', '--path', path])) as { action: string; message?: string }
+    if (verdict.action === 'refuse' && verdict.message) return { deny: verdict.message }
+  } catch (err) {
+    $.ui.log(`session hive: claim not checked (${err})`, { to: 'debug' })
+  }
+  return undefined
 }
 
 function isUser(origin: { kind: string } | undefined): boolean {
@@ -62,7 +81,7 @@ export const register: Register = on => {
   on('prompt.context', async ($, e, next) => {
     const r = await next(e)
     try {
-      const text = (await hive($, ['peers', '--cwd', await $.session.cwd()])).trim()
+      const text = (await hive($, ['peers', '--cwd', await $.session.cwd(), ...(await weekly($))])).trim()
       if (text) return { ...r, blocks: [...r.blocks, { name: 'sessionHive', text }] }
     } catch (err) {
       $.ui.log(`session hive: no peer list (${err})`, { to: 'debug' })
@@ -91,7 +110,7 @@ export const register: Register = on => {
       $.ui.log(`session hive: delivered unchecked (${err})`, { to: 'debug' })
     }
     return next(e)
-  })
+  }).catch(($, e, next) => next(e))
 
   on('prompt.submit', async ($, e, next) => {
     if (e.command || !isUser(e.origin)) return next(e)
@@ -102,13 +121,23 @@ export const register: Register = on => {
       $.ui.log(`session hive: waiting notes not read (${err})`, { to: 'debug' })
     }
     return next(e)
-  })
+  }).catch(($, e, next) => next(e))
 
   on('session.send', async ($, e, next) => {
     const r = await next(e)
     if (!e.agentId) await hive($, ['sent', '--to', e.to], e.text).catch(() => {})
     return r
-  })
+  }).catch(($, e, next) => next(e))
+
+  // File claims: the first edit claims a file for an hour; another live
+  // session's first edit of it inside that hour is refused once, naming the
+  // holder, and its retry goes through. A failed check never blocks an edit.
+  on('tool.call', { tool: 'Edit' }, async ($, e, next) => (await claimRefusal($, e.file_path)) ?? next(e))
+    .catch(($, e, next) => next(e))
+  on('tool.call', { tool: 'Write' }, async ($, e, next) => (await claimRefusal($, e.file_path)) ?? next(e))
+    .catch(($, e, next) => next(e))
+  on('tool.call', { tool: 'NotebookEdit' }, async ($, e, next) => (await claimRefusal($, e.notebook_path)) ?? next(e))
+    .catch(($, e, next) => next(e))
 
   on('session.start', async ($, e, next) => {
     const r = await next(e)

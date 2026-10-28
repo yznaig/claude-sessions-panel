@@ -138,6 +138,53 @@ class Hive(unittest.TestCase):
         self.assertEqual((rec['dir'], rec['from'], rec['to'], rec['first']), ('out', 'work-aa', 'work-bb', 'FYI: TICKET-11 rebuild queued.'))
         self.assertIn('work-aa → work-bb  sent: FYI', self.run_hive('log'))
 
+    # --- usage ---
+
+    def test_the_weekly_window_is_a_warning_in_the_list_not_a_hold(self):
+        self.assertIn('weekly usage window is 88% used', self.run_hive('peers', '--week', '88'))
+        self.assertNotIn('weekly usage', self.run_hive('peers', '--week', '40'))
+
+    # --- file claims ---
+
+    def claim(self, path, who='me-0001'):
+        return json.loads(self.run_hive('claim', '--path', path, self_id=who))
+
+    def test_a_second_session_is_refused_once_then_its_retry_goes_through(self):
+        self.assertEqual(self.claim('/work/repo/docs/asks.md')['action'], 'allow')
+        self.assertEqual(self.claim('/work/repo/docs/asks.md')['action'], 'allow', 'the holder keeps editing freely')
+        v = self.claim('/work/repo/docs/asks.md', who='peer-0002')
+        self.assertEqual(v['action'], 'refuse')
+        self.assertIn('work-aa has been editing /work/repo/docs/asks.md', v['message'])
+        self.assertIn('Message work-aa first', v['message'])
+        self.assertEqual(self.claim('/work/repo/docs/asks.md', who='peer-0002')['action'], 'allow', 'the retry')
+        # The retrying session now holds it, so the first one is the one asked next time.
+        self.assertEqual(self.claim('/work/repo/docs/asks.md')['action'], 'refuse')
+        self.assertIn('was asked to message work-aa before editing /work/repo/docs/asks.md', self.run_hive('log'))
+
+    def test_other_files_and_scratch_files_are_not_held(self):
+        self.claim('/work/repo/a.md')
+        self.assertEqual(self.claim('/work/repo/b.md', who='peer-0002')['action'], 'allow')
+        self.claim('/tmp/scratch/x.py')
+        self.assertEqual(self.claim('/tmp/scratch/x.py', who='peer-0002')['action'], 'allow')
+
+    def test_a_claim_lapses_an_hour_after_the_last_edit(self):
+        self.claim('/work/repo/a.md')
+        path = os.path.join(self.home, '.claude', 'session-hive', 'claims.json')
+        with open(path) as f:
+            state = json.load(f)
+        state['claims']['/work/repo/a.md']['at'] -= 3601
+        with open(path, 'w') as f:
+            json.dump(state, f)
+        self.assertEqual(self.claim('/work/repo/a.md', who='peer-0002')['action'], 'allow')
+
+    def test_a_claim_of_a_session_that_ended_does_not_hold(self):
+        p = subprocess.Popen(['sleep', '30'])
+        self.register(p.pid, 'gone-0004', 'work-dd', '/work/repo')
+        self.claim('/work/repo/a.md', who='gone-0004')
+        p.kill()
+        p.wait()
+        self.assertEqual(self.claim('/work/repo/a.md')['action'], 'allow')
+
 
 if __name__ == '__main__':
     unittest.main()
