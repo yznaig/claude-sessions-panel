@@ -379,10 +379,15 @@ def cmd_digest(a, live):
     else:
         shown = turns[:2] + turns[-(a.turns - 2):]
     skipped = len(turns) - len(shown)
+    # --chars 0 (the default) prints every message whole; a cap is only for skimming.
+    def cap(text, tail=False):
+        if a.chars <= 0 or len(text) <= a.chars:
+            return text
+        return ('… ' + text[-a.chars:]) if tail else (text[:a.chars] + ' …')
     for i, (u, r) in enumerate(shown):
         if i == 2 and skipped:
             print(f'… {skipped} earlier turns skipped (use --turns 0 for all) …\n')
-        print(f'## You\n{u[:a.chars]}\n\n## Claude\n{r[-a.chars:]}\n')
+        print(f'## You\n{cap(u)}\n\n## Claude\n{cap(r, tail=True)}\n')
     return 0
 
 
@@ -400,7 +405,8 @@ def main():
         p.add_argument('--include-headless', action='store_true')
         if name == 'recent':
             p.add_argument('--days', type=float, default=7)
-    p = sub.add_parser('digest'); p.add_argument('id'); p.add_argument('--turns', type=int, default=12); p.add_argument('--chars', type=int, default=1500)
+    p = sub.add_parser('digest'); p.add_argument('id'); p.add_argument('--turns', type=int, default=0, help='0 = every turn (default); N = first 2 and last N-2')
+    p.add_argument('--chars', type=int, default=0, help='0 = whole messages (default); N = cap each message, marked with …')
     for p in sub.choices.values():
         p.add_argument('--json', action='store_true')
     a = ap.parse_args()

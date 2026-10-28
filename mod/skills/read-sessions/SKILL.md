@@ -35,17 +35,20 @@ The resolved list is done when every session in it is one they meant, with nothi
 
 ## 3. Read
 
-Depth follows the count, and you announce it:
-- **1–4 sessions:** `digest <id> --turns 0` for each, the whole conversation.
-- **5–12:** `digest <id>` for each: the first two turns and the last ten.
-- **More than 12:** subagents on a mid-tier model, five to eight sessions each. Write one brief to the scratchpad naming the user's goal, the finder's path, and the reply shape: per session, what it set out to do, what it produced, where it stopped, what it is waiting on, at most 12 lines, with **stated** (the transcript says it) kept apart from **inferred**.
+Read every session whole. `digest <id>` prints every turn and every message in full by default. Write each one to its own scratchpad file (`digest <id> > <scratchpad>/<id>.md`) and read that file to the end.
+- **Never trim the output.** No `head`, `tail`, `cut` or `--chars` on a digest you report from. Do not loop several digests into one command whose output gets cut. A summary built from a cut-off transcript is the failure this skill exists to prevent: the session's last message is where its open items live.
+- **A very long session** (digest over about 80 KB): read the first two turns and the last ten in full (`--turns 12`), plus `grep` the file for `Decision`, `your call`, `needs you` and `?` in Claude's replies so items from the skipped middle still surface. Say which sessions you read this way.
+- **The last message, always in full.** Claude's final reply and the user's final prompt decide whether a session is done.
+- **More than 12 sessions:** subagents on a mid-tier model, five to eight sessions each. Write one brief to the scratchpad naming the user's goal, the finder's path, the same full-read rules, and the reply shape: per session, what it set out to do, what it produced, where it stopped, what it is waiting on, at most 12 lines, with **stated** (the transcript says it) kept apart from **inferred**.
 
 While reading:
 - **Check claims against the world.** A session saying it committed, merged, sent or filed something is a lead; confirm it in the repo (`git log`, the file) before you repeat it.
 - **Running sessions move.** A session whose state is `busy`, `idle` or `waiting` is still open; its last word is provisional.
 - **Stay out of other sessions.** Read transcripts only; never message a live session as part of this.
 
-Reading is done when every session on the list has been read at its tier or named as skipped with the reason.
+- **Before calling something not done, look where it would have landed:** the repo, the asks or reports folder, sent mail. A different session may have finished it.
+
+Reading is done when every session on the list has been read in full (or the long-session way, named), or named as skipped with the reason.
 
 ## 4. Report
 
@@ -56,6 +59,8 @@ Open with the coverage line: "Read N of M sessions (depth); skipped: …". Then,
 3. Decisions the user owes, numbered, each with your recommendation.
 4. Conflicts between sessions (two sessions that changed the same thing, or disagree).
 5. What the transcripts could not tell you.
+
+**Safe to close** is a verdict, not a guess. A session is safe to close only when its last message leaves nothing open, or every open item is named where it now lives (a list another session holds, a committed file, a sent message). Name the place beside each one. A session with an open item that lives nowhere else is "keep".
 
 Then carry on with what they asked for; the reading was context for it.
 
