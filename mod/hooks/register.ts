@@ -29,8 +29,16 @@ async function vscodeShows($: EngineInterface): Promise<boolean> {
 // engine knows (who sent a message, whether a turn is running, the context
 // size, the usage windows) and act on its answer. Any failure lets the
 // message through as it came: the hive never loses one.
+//
+// Headless runs (`claude -p`, scripted workers like an overnight build
+// runner) are left out entirely: no rules, no list, no claims, no logging.
+// Headless means Claude Code stamped the process `sdk-cli` (or another
+// `sdk-*`) in CLAUDE_CODE_ENTRYPOINT. A `-p` run started from inside a VS Code
+// session inherits that session's stamp and keeps the hive; a runner that
+// starts its workers from a clean environment gets `sdk-cli`.
 
 let busy = false
+let headless = false
 
 async function hive($: EngineInterface, args: string[], stdin = ''): Promise<string> {
   const script = `${$.plugin.root}/skills/session-hive/scripts/hive.py`
@@ -63,7 +71,7 @@ async function weekly($: EngineInterface): Promise<string[]> {
 
 // A file edit's claim check: a refusal to hand back, or undefined to go on.
 async function claimRefusal($: EngineInterface, path: string | undefined): Promise<{ deny: string } | undefined> {
-  if (!path) return undefined
+  if (!path || headless) return undefined
   try {
     const verdict = JSON.parse(await hive($, ['claim', '--path', path])) as { action: string; message?: string }
     if (verdict.action === 'refuse' && verdict.message) return { deny: verdict.message }
@@ -80,6 +88,7 @@ function isUser(origin: { kind: string } | undefined): boolean {
 export const register: Register = on => {
   on('prompt.context', async ($, e, next) => {
     const r = await next(e)
+    if (headless) return r
     try {
       const text = (await hive($, ['peers', '--cwd', await $.session.cwd(), ...(await weekly($))])).trim()
       if (text) return { ...r, blocks: [...r.blocks, { name: 'sessionHive', text }] }
@@ -100,7 +109,7 @@ export const register: Register = on => {
   })
 
   on('session.receive', async ($, e, next) => {
-    if (e.origin.kind !== 'peer' || 'teammate' in e.origin || e.agentId) return next(e)
+    if (headless || e.origin.kind !== 'peer' || 'teammate' in e.origin || e.agentId) return next(e)
     try {
       const args = ['receive', '--from', senderOf(e.text), '--busy', busy ? '1' : '0', ...(await measures($))]
       const verdict = JSON.parse(await hive($, args, e.text)) as { action: string; reason?: string; text?: string }
@@ -113,7 +122,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('prompt.submit', async ($, e, next) => {
-    if (e.command || !isUser(e.origin)) return next(e)
+    if (headless || e.command || !isUser(e.origin)) return next(e)
     try {
       const notes = (await hive($, ['held', '--take'])).trim()
       if (notes) return next({ ...e, context: [...(e.context ?? []), notes] })
@@ -125,7 +134,7 @@ export const register: Register = on => {
 
   on('session.send', async ($, e, next) => {
     const r = await next(e)
-    if (!e.agentId) await hive($, ['sent', '--to', e.to], e.text).catch(() => {})
+    if (!e.agentId && !headless) await hive($, ['sent', '--to', e.to], e.text).catch(() => {})
     return r
   }).catch(($, e, next) => next(e))
 
@@ -140,6 +149,7 @@ export const register: Register = on => {
     .catch(($, e, next) => next(e))
 
   on('session.start', async ($, e, next) => {
+    headless = ((await $.env.get('CLAUDE_CODE_ENTRYPOINT').catch(() => undefined)) ?? '').startsWith('sdk')
     const r = await next(e)
     if (await vscodeShows($)) await write($, true).catch(() => {})
     return r
