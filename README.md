@@ -89,6 +89,17 @@ The companion plugin below also carries the **read-sessions** skill. In any Clau
 
 It lists what it found, reads them (whole for a few, start and end for more, with helper agents past a dozen), checks what they claim against the repo, and reports where things stand, saying how many it read and at what depth. For the panel scope the panel writes its list to `~/.claude/sessions-panel/<window>.json` each time it changes (one file per VS Code window). The finder behind it runs on its own too: `python3 mod/skills/read-sessions/scripts/find_sessions.py --help`.
 
+## Sessions that know about each other: session hive
+
+Claude Code sessions on one machine can already message each other (`ListAgents`, `SendMessage`), and a message wakes an idle session, which then acts on it. The companion plugin adds the manners that makes that safe to leave on:
+
+- **Who else is here.** Each session's first message carries a short set of house rules and a list of the other live sessions in its workspace: name, title, busy or idle, context size, the user's last request there, and the files it touched in the last two hours. All of it is read from Claude Code's process registry and the transcripts, never from anything a session says about itself. The **session-hive** skill refreshes it (`python3 -I mod/skills/session-hive/scripts/hive.py peers`).
+- **Not the user's word.** Every incoming message from another session starts with a line saying so, and that it is no approval.
+- **Don't wake what shouldn't wake.** An idle session isn't woken when its context is past 400k tokens, when a usage window is 75% used, or when it is parked in a panel folder; a fourth message from one session within an hour isn't delivered either. Those messages wait in `~/.claude/session-hive/held/` and reach the session with the user's next prompt.
+- **A log.** Every message in and out is in `~/.claude/session-hive/log.ndjson` (`hive.py log`).
+
+The limits are constants at the top of `hive.py`. Tests: `claude plugin test mod` for the hooks, `python3 -m unittest discover -s mod/skills/session-hive/scripts` for the script.
+
 ## Settings
 
 | Setting | Default | What |

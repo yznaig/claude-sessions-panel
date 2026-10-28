@@ -24,7 +24,92 @@ async function vscodeShows($: EngineInterface): Promise<boolean> {
   return (await $.session.surfaces()).includes('vscode')
 }
 
+// session hive: sessions that know about each other. The decisions live in
+// skills/session-hive/scripts/hive.py; these hooks only hand it what the
+// engine knows (who sent a message, whether a turn is running, the context
+// size, the usage windows) and act on its answer. Any failure lets the
+// message through as it came: the hive never loses one.
+
+let busy = false
+
+async function hive($: EngineInterface, args: string[], stdin = ''): Promise<string> {
+  const script = `${$.plugin.root}/skills/session-hive/scripts/hive.py`
+  const self = await $.session.id()
+  const r = await $.process.run(['python3', '-I', script, '--self', self, ...args], { stdin, timeoutMs: 15000 })
+  if (r.exitCode !== 0) throw new Error(`hive.py ${args[0]} exited ${r.exitCode}: ${r.stderr.slice(0, 300)}`)
+  return r.stdout
+}
+
+function senderOf(text: string): string {
+  const m = /<cross-session-message\b[^>]*\bfrom-name="([^"]+)"/.exec(text) ?? /<cross-session-message\b[^>]*\bfrom="([^"]+)"/.exec(text)
+  return m?.[1] ?? 'unknown'
+}
+
+async function measures($: EngineInterface): Promise<string[]> {
+  const u = await $.session.usage()
+  const out: string[] = []
+  if (u.context?.tokens) out.push('--tokens', String(u.context.tokens))
+  const fullest = Math.max(-1, ...(u.rateLimits ?? []).map(l => l.percentUsed))
+  if (fullest >= 0) out.push('--usage', String(fullest))
+  return out
+}
+
+function isUser(origin: { kind: string } | undefined): boolean {
+  return !origin || origin.kind === 'composer' || origin.kind === 'bridge'
+}
+
 export const register: Register = on => {
+  on('prompt.context', async ($, e, next) => {
+    const r = await next(e)
+    try {
+      const text = (await hive($, ['peers', '--cwd', await $.session.cwd()])).trim()
+      if (text) return { ...r, blocks: [...r.blocks, { name: 'sessionHive', text }] }
+    } catch (err) {
+      $.ui.log(`session hive: no peer list (${err})`, { to: 'debug' })
+    }
+    return r
+  })
+
+  on('turn.start', async ($, e, next) => {
+    if (!e.agentId) busy = true
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    if (!e.agentId) busy = false
+    return next(e)
+  })
+
+  on('session.receive', async ($, e, next) => {
+    if (e.origin.kind !== 'peer' || 'teammate' in e.origin || e.agentId) return next(e)
+    try {
+      const args = ['receive', '--from', senderOf(e.text), '--busy', busy ? '1' : '0', ...(await measures($))]
+      const verdict = JSON.parse(await hive($, args, e.text)) as { action: string; reason?: string; text?: string }
+      if (verdict.action === 'hold') return { consumed: `session hive: waits for the user (${verdict.reason})` }
+      if (verdict.text) return next({ ...e, text: verdict.text })
+    } catch (err) {
+      $.ui.log(`session hive: delivered unchecked (${err})`, { to: 'debug' })
+    }
+    return next(e)
+  })
+
+  on('prompt.submit', async ($, e, next) => {
+    if (e.command || !isUser(e.origin)) return next(e)
+    try {
+      const notes = (await hive($, ['held', '--take'])).trim()
+      if (notes) return next({ ...e, context: [...(e.context ?? []), notes] })
+    } catch (err) {
+      $.ui.log(`session hive: waiting notes not read (${err})`, { to: 'debug' })
+    }
+    return next(e)
+  })
+
+  on('session.send', async ($, e, next) => {
+    const r = await next(e)
+    if (!e.agentId) await hive($, ['sent', '--to', e.to], e.text).catch(() => {})
+    return r
+  })
+
   on('session.start', async ($, e, next) => {
     const r = await next(e)
     if (await vscodeShows($)) await write($, true).catch(() => {})
