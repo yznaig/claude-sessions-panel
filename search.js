@@ -16,7 +16,7 @@ const fsp = fs.promises;
 const path = require('path');
 const { performance } = require('perf_hooks');
 
-const FORMAT = 1; // bump when what is kept per session changes, so saved indexes are rebuilt
+const FORMAT = 3; // bump when what is kept per session changes, so saved indexes are rebuilt
 const HEADLESS = new Set(['sdk-cli', 'sdk-ts', 'sdk-py', 'sdk']);
 const NOISE = ['<ide_opened_file>', '<ide_selection>', '<command-name>', '<command-message>', '<local-command',
   '<system-reminder>', '<task-notification>', '<bash-stdout>', '<bash-stderr>', '<bash-input>',
@@ -25,11 +25,12 @@ const PATH_KEYS = ['file_path', 'path', 'notebook_path'];
 // Sessions run in a session's scratchpad (probes, tests): not worth finding.
 const THROWAWAY = /^\/tmp\/claude-\d+\/|\/scratchpad(\/|$)/;
 const KEEP = { prompt: 4000, reply: 3000, prompts: 60000, replies: 80000, files: 60 };
-// How much each place a word turns up counts, and how many times it can count there.
-const WEIGHT = { title: [8, 3], you: [3, 10], file: [2, 5], claude: [1, 10] };
+// How much each place a word turns up counts.
+const WEIGHT = { title: 4, you: 1.5, file: 1, claude: 1 };
 const SLICE_MS = 12;
 const SLOW_ROOT_MS = 120e3;
-const SAVE_MS = 30e3; // work in slices this long, so the editor stays responsive during the first build
+const SAVE_MS = 30e3;
+const HEAD_BYTES = 256; // work in slices this long, so the editor stays responsive during the first build
 
 const clean = t => String(t || '')
   .replace(/<(system-reminder|ide_selection|ide_opened_file)>[\s\S]*?<\/\1>/g, '')
@@ -45,6 +46,12 @@ function humanText(r) {
     parts = c.filter(b => b && b.type === 'text').map(b => b.text || '');
   } else return null;
   const text = clean(parts.join('\n'));
+  // A slash command: what you asked is its name and arguments.
+  const name = /<command-name>([^<]*)<\/command-name>/.exec(text);
+  if (name) {
+    const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text);
+    return `${name[1].trim()} ${args ? args[1].trim() : ''}`.trim() || null;
+  }
   if (!text || NOISE.some(n => text.startsWith(n))) return null;
   return text;
 }
@@ -58,8 +65,8 @@ function pushCapped(list, text, each, total) {
 
 function fresh(file) {
   return {
-    file, id: path.basename(file, '.jsonl'), offset: 0, tail: '', mtime: 0,
-    title: '', ai: '', cwd: '', entry: '', start: 0, end: 0, turns: 0, firstUuid: null,
+    file, id: path.basename(file, '.jsonl'), offset: 0, head: '', mtime: 0,
+    title: '', ai: '', cwd: '', entry: '', start: 0, end: 0, turns: 0, firstKey: '',
     prompts: [], replies: [], reply: '', files: {},
   };
 }
@@ -85,7 +92,8 @@ function scan(s, line) {
     if (!text) return;
     if (s.reply) { pushCapped(s.replies, s.reply, KEEP.reply, KEEP.replies); s.reply = ''; }
     s.turns += 1;
-    if (!s.firstUuid) s.firstUuid = r.uuid || null;
+    // A fork copies its parent's history, timestamps included: the first prompt and its time mark the pair.
+    if (!s.firstKey) s.firstKey = `${r.timestamp || ''}|${text.slice(0, 200)}`;
     pushCapped(s.prompts, text, KEEP.prompt, KEEP.prompts);
     return;
   }
@@ -103,7 +111,7 @@ function scan(s, line) {
 // Words a question is made of but a session is not found by.
 const COMMON = new Set(('the and for are but not you your yours our ours was were has have had did does doing done ' +
   'what when where which who whom whose why how that this these those there here then than them they their ' +
-  'with from into onto about over under again also just like some any all can could would should will shall ' +
+  'with from into onto about over under again also just like some any all can could would should shall ' +
   'its it\'s been being get got let make made say said tell told know think want need one ones way thing things ' +
   'session sessions claude decide decided talk talked mention mentioned remember').split(' '));
 
@@ -210,26 +218,41 @@ class SearchIndex {
     this.progress = { done: 0, total: todo.length };
     let slice = performance.now();
     for (const [f, st] of todo) {
+      if (this.stopped) return;
       let s = this.byFile.get(f);
-      if (!s || st.size < s.offset) s = fresh(f); // new, or rewritten
       try {
         const fh = await fsp.open(f, 'r');
         try {
-          const CHUNK = 4 << 20;
+          // The file's first bytes tell a file rewritten in place (same size or longer) from one appended to.
+          const first = Buffer.alloc(HEAD_BYTES);
+          const got = (await fh.read(first, 0, HEAD_BYTES, 0)).bytesRead;
+          const headOf = len => first.toString('base64', 0, Math.min(got, len));
+          // Compared over the bytes already read, which an append never changes.
+          if (!s || st.size < s.offset || (s.head && headOf(Math.min(HEAD_BYTES, s.offset)) !== s.head)) s = fresh(f);
+          // Worked on as a copy: a save meanwhile keeps the last whole state.
+          s = { ...s, prompts: [...s.prompts], replies: [...s.replies], files: { ...s.files } };
+          // Whole lines only: the offset stays at a line's start, so a line still being written, or a
+          // character split between reads, is read again whole next time.
+          let chunk = 4 << 20;
           while (s.offset < st.size) {
-            const buf = Buffer.alloc(Math.min(CHUNK, st.size - s.offset));
+            const buf = Buffer.alloc(Math.min(chunk, st.size - s.offset));
             const { bytesRead } = await fh.read(buf, 0, buf.length, s.offset);
             if (!bytesRead) break;
-            const text = s.tail + buf.toString('utf8', 0, bytesRead);
-            const cut = text.lastIndexOf('\n');
-            const lines = cut >= 0 ? text.slice(0, cut).split('\n') : [];
-            s.tail = cut >= 0 ? text.slice(cut + 1) : text;
-            s.offset += bytesRead;
-            for (const line of lines) {
-              scan(s, line);
-              if (performance.now() - slice > SLICE_MS) { await new Promise(r => setImmediate(r)); slice = performance.now(); }
+            const cut = buf.lastIndexOf(10, bytesRead - 1);
+            if (cut < 0) {
+              if (s.offset + bytesRead >= st.size) break; // the last line is not finished yet
+              chunk *= 2; continue;                         // one line longer than the chunk
             }
+            for (const line of buf.toString('utf8', 0, cut).split('\n')) {
+              scan(s, line);
+              if (performance.now() - slice > SLICE_MS) {
+                await new Promise(r => setImmediate(r)); slice = performance.now();
+                if (this.stopped) return;
+              }
+            }
+            s.offset += cut + 1;
           }
+          s.head = headOf(Math.min(HEAD_BYTES, s.offset));
         } finally { await fh.close(); }
       } catch { continue; }
       s.mtime = st.mtimeMs;
@@ -244,21 +267,22 @@ class SearchIndex {
     else if (!this.saveTimer) { this.saveTimer = setTimeout(() => this.save(), SAVE_MS); this.saveTimer.unref(); }
   }
 
-  // Writes any unsaved change now (the panel stopping).
-  flush() { if (this.saveTimer) this.save(); }
+  // Writes any unsaved change now (the panel stopping), and stops a build under way.
+  flush() { this.stopped = true; if (this.saveTimer) this.save(); }
 
   save() {
     if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
     try {
       fs.mkdirSync(path.dirname(this.cacheFile), { recursive: true });
       const sessions = [...this.byFile.values()].map(({ low, titleText, allReplies, ...s }) => s);
-      fs.writeFileSync(this.cacheFile + '.tmp', JSON.stringify({ format: FORMAT, sessions }));
-      fs.renameSync(this.cacheFile + '.tmp', this.cacheFile);
+      const tmp = `${this.cacheFile}.${process.pid}.tmp`; // windows saving at once each write their own
+      fs.writeFileSync(tmp, JSON.stringify({ format: FORMAT, sessions }));
+      fs.renameSync(tmp, this.cacheFile);
     } catch { /* kept in memory; rebuilt next start */ }
   }
 
-  // The sessions worth searching: one per id (the longest copy across config folders), a fork shown
-  // as the copy that went furthest, no headless runs or throwaway folders.
+  // The sessions worth searching: one per id (the longest copy across config folders), no headless
+  // runs or throwaway folders.
   sessions() {
     const byId = new Map();
     for (const s of this.byFile.values()) {
@@ -266,15 +290,7 @@ class SearchIndex {
       const prev = byId.get(s.id);
       if (!prev || s.turns > prev.turns) byId.set(s.id, s);
     }
-    const byFirst = new Map();
-    const out = [];
-    for (const s of byId.values()) {
-      if (!s.firstUuid) { out.push(s); continue; }
-      const prev = byFirst.get(s.firstUuid);
-      const last = x => x.end || x.mtime;
-      if (!prev || last(s) > last(prev) || (last(s) === last(prev) && s.turns > prev.turns)) byFirst.set(s.firstUuid, s);
-    }
-    return out.concat([...byFirst.values()]);
+    return [...byId.values()];
   }
 
   // Ranked results for a query. `shows(cwd)` limits them to some folders (this window).
@@ -282,35 +298,65 @@ class SearchIndex {
     const terms = termsOf(query);
     if (!terms.length) return [];
     const now = this.now();
-    const scored = [];
-    for (const s of this.sessions()) {
-      if (!shows(s.cwd)) continue;
-      if (!s.low) {
-        s.titleText = s.title || s.ai || '';
-        s.allReplies = s.reply ? [...s.replies, s.reply] : s.replies;
-        s.low = {
-          title: s.titleText.toLowerCase(), you: s.prompts.join('\n').toLowerCase(),
-          file: Object.keys(s.files).join('\n').toLowerCase(), claude: s.allReplies.join('\n').toLowerCase(),
-        };
-      }
-      let score = 0, matched = 0;
-      for (const t of terms) {
-        let here = 0;
-        for (const [field, [w, cap]] of Object.entries(WEIGHT)) here += w * Math.min(count(s.low[field], t), cap);
-        if (here) { matched += 1; score += here * (t.includes(' ') ? 1.5 : 1); }
-      }
-      if (!score) continue;
-      score *= (matched / terms.length) ** 2;                         // every word beats one word often
-      const days = Math.max(0, now - (s.end || s.mtime)) / 86400e3;
-      score *= 1 + 0.5 * Math.exp(-days / 14);                       // recent first, when close
-      scored.push({ s, score });
+    const pool = this.sessions().filter(s => shows(s.cwd));
+    for (const s of pool) {
+      if (s.low) continue;
+      s.titleText = s.title || s.ai || '';
+      s.allReplies = s.reply ? [...s.replies, s.reply] : s.replies;
+      s.low = {
+        title: s.titleText.toLowerCase(), you: s.prompts.join('\n').toLowerCase(),
+        file: Object.keys(s.files).join('\n').toLowerCase(), claude: s.allReplies.join('\n').toLowerCase(),
+      };
     }
+    // BM25-style: a word found in few sessions counts for more than one found in most; repeats add
+    // less and less; a long session needs more repeats than a short one to count the same.
+    const counts = pool.map(s => terms.map(t => Object.fromEntries(Object.keys(WEIGHT).map(f => [f, count(s.low[f], t)]))));
+    const n = Math.max(1, pool.length);
+    const idf = terms.map((_, i) => {
+      const df = counts.filter(c => Object.values(c[i]).some(Boolean)).length;
+      return Math.log(1 + (n - df + 0.5) / (df + 0.5));
+    });
+    const avg = f => pool.reduce((a, s) => a + s.low[f].length, 0) / n || 1;
+    const avgLen = { you: avg('you'), claude: avg('claude') };
+    const K = 1.2, B = 0.75;
+    const scored = [];
+    pool.forEach((s, si) => {
+      let score = 0, matched = 0;
+      terms.forEach((t, i) => {
+        let here = 0;
+        for (const [f, w] of Object.entries(WEIGHT)) {
+          const tf = counts[si][i][f];
+          if (!tf) continue;
+          const norm = avgLen[f] ? 1 - B + B * s.low[f].length / avgLen[f] : 1;
+          here += w * tf * (K + 1) / (tf + K * norm);
+        }
+        if (here) { matched += 1; score += idf[i] * here * (t.includes(' ') ? 1.5 : 1); }
+      });
+      if (!score) return;
+      score *= (matched / terms.length) ** 2;                          // every word beats one word often
+      if (terms.every(t => s.low.title.includes(t))) score *= 2;      // its title says it all
+      const days = Math.max(0, now - (s.end || s.mtime)) / 86400e3;
+      score *= 1 + Math.exp(-days / 14);                              // recent first, when close
+      scored.push({ s, score });
+    });
     scored.sort((a, b) => b.score - a.score || (b.s.end || b.s.mtime) - (a.s.end || a.s.mtime));
-    return scored.slice(0, limit).map(({ s, score }) => ({
-      id: s.id, title: s.titleText || s.prompts[0] && s.prompts[0].slice(0, 80) || s.id.slice(0, 8),
-      cwd: s.cwd, repo: path.basename(s.cwd || '') || '?', end: s.end || s.mtime, turns: s.turns,
-      score: Math.round(score * 10) / 10, ...snippetOf(s, terms),
-    }));
+    const out = [];
+    // A fork and the session it came from share their start: a match in that shared part (the same
+    // passage, word for word) shows once, as the better-ranked of the two.
+    const shown = new Set();
+    for (const { s, score } of scored) {
+      if (out.length >= limit) break;
+      const snip = snippetOf(s, terms);
+      const key = `${s.firstKey}\n${snip.where}\n${snip.snippet}`;
+      if (shown.has(key)) continue;
+      shown.add(key);
+      out.push({
+        id: s.id, title: s.titleText || s.prompts[0] && s.prompts[0].slice(0, 80) || s.id.slice(0, 8),
+        cwd: s.cwd, repo: path.basename(s.cwd || '') || '?', end: s.end || s.mtime, turns: s.turns, file: s.file,
+        score: Math.round(score * 10) / 10, ...snip,
+      });
+    }
+    return out;
   }
 
   // The most recently active sessions, for Ask Claude when few match the words.
@@ -383,7 +429,7 @@ function readAnswer(text, results) {
   // One entry per session, its quotes together.
   const byId = new Map();
   for (const { r, quote } of sources) {
-    const e = byId.get(r.id) || { id: r.id, title: r.title, repo: r.repo, cwd: r.cwd, quotes: [] };
+    const e = byId.get(r.id) || { id: r.id, title: r.title, repo: r.repo, cwd: r.cwd, file: r.file, quotes: [] };
     if (quote) e.quotes.push(quote);
     byId.set(r.id, e);
   }

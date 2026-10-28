@@ -717,11 +717,14 @@ withHarness('search: leaves out throwaway runs, headless runs and subagents', as
   same(await h.search('walrus'), ['Real']);
 });
 
-withHarness('search: a fork and the session it came from show once, the one that went furthest', async h => {
-  past(h, 'parent', { title: 'Parent', you: ['plan the otter migration'], uuid: 'u-1', at: h.now - 2 * DAY });
-  past(h, 'fork', { title: 'Parent (fork)', you: ['plan the otter migration', 'and then more'], uuid: 'u-1' });
+withHarness('search: a fork and the session it came from show once for what they share, each for its own part', async h => {
+  past(h, 'parent', { title: 'Parent', you: ['plan the otter migration', 'then the badger'] });
+  past(h, 'fork', { title: 'Parent (fork)', you: ['plan the otter migration', 'and the mole'] });
+  past(h, 'again', { title: 'Same words, another day', you: ['plan the otter migration'], at: h.now - 3 * DAY });
   h.start();
-  same(await h.search('otter'), ['Parent (fork)']);
+  eq((await h.search('otter')).length, 2, 'the fork pair once, the separate session too');
+  same(await h.search('mole'), ['Parent (fork)']);
+  same(await h.search('badger'), ['Parent']);
 });
 
 withHarness('search: new words in a session are found on the next search; the index is kept for the next start', async h => {
@@ -737,7 +740,7 @@ withHarness('search: new words in a session are found on the next search; the in
 
 withHarness('search: this window only, or every session; results say which are running', async h => {
   past(h, 'here', { title: 'Here', you: ['the beacon'] });
-  past(h, 'there', { title: 'There', you: ['the beacon'], cwd: h.other });
+  past(h, 'there', { title: 'There', you: ['the beacon'], cwd: h.other, at: h.now - 2 * DAY });
   h.session('here');
   h.start();
   same((await h.search('beacon', true)).sort(), ['Here', 'There']);
@@ -810,4 +813,99 @@ withHarness('ask: two quotes from one session show it once', async h => {
   h.start();
   h.askReply = { answer: 'In A.', sources: [{ session: 1, quote: 'one' }, { session: 1, quote: 'two' }] };
   same((await h.ask('harbor')).sources.map(s => [s.title, s.quote]), [['A', 'one … two']]);
+});
+
+withHarness('search: a session run through slash commands is found by what you asked', async h => {
+  h.transcript('slash', [L.customTitle('New pass'),
+    L.said('<command-message>pass is running…</command-message>\n<command-name>/pass</command-name>\n<command-args>just got another message from Will about the gantry</command-args>', { cwd: h.proj }),
+    L.replied('On it.', { cwd: h.proj })]);
+  h.start();
+  same(await h.search('gantry'), ['New pass']);
+  eq(h.results.results[0].where, 'you');
+});
+
+withHarness('search: a character split across a read boundary, or written in two halves, stays whole', async h => {
+  const fs = require('fs'), path = require('path');
+  h.transcript('a', [L.customTitle('A')]);
+  const file = path.join(h.home, '.claude/projects', h.proj.replace(/[^a-zA-Z0-9]/g, '-'), h.id('a') + '.jsonl');
+  // Tool output (not indexed) long enough that the next line's "é" sits across the 4 MB read boundary.
+  const said = Buffer.from(L.said('my résumé draft', { cwd: h.proj }) + '\n');
+  const e = said.indexOf(Buffer.from('é'));
+  const shell = n => Buffer.from(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: 'x'.repeat(n) }] } }) + '\n');
+  const n = (4 << 20) - fs.statSync(file).size - shell(0).length - e - 1;
+  fs.appendFileSync(file, Buffer.concat([shell(n), said]));
+  // And a line arriving in two writes, cut inside "ü".
+  const bytes = Buffer.from(L.said('the müesli plan', { cwd: h.proj }) + '\n');
+  const cut = bytes.indexOf(Buffer.from('ü')) + 1;
+  fs.appendFileSync(file, bytes.subarray(0, cut));
+  h.start();
+  same(await h.search('résumé'), ['A']);
+  fs.appendFileSync(file, bytes.subarray(cut));
+  same(await h.search('müesli'), ['A']);
+});
+
+withHarness('search: a transcript rewritten in place is read again from the start', async h => {
+  const fs = require('fs'), path = require('path');
+  h.transcript('a', [L.customTitle('A'), L.said('the old words here', { cwd: h.proj })]);
+  h.start();
+  same(await h.search('old'), ['A']);
+  const file = path.join(h.home, '.claude/projects', h.proj.replace(/[^a-zA-Z0-9]/g, '-'), h.id('a') + '.jsonl');
+  fs.writeFileSync(file, [L.customTitle('B'), L.said('brand new words, longer than before', { cwd: h.proj })].join('\n') + '\n');
+  same(await h.search('old'), []);
+  same(await h.search('brand'), ['B']);
+});
+
+withHarness("search: a session from another Claude login or the Windows side offers its transcript instead", async h => {
+  const fs = require('fs'), path = require('path');
+  const other = path.join(h.home, '.claude-work/projects');
+  h.config.searchFolders = [path.join(h.home, '.claude/projects'), other];
+  const dir = path.join(other, 'p'); fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'far-away.jsonl'), [L.customTitle('Far'), L.said('the lighthouse', { cwd: h.other })].join('\n') + '\n');
+  past(h, 'near', { title: 'Near', you: ['the lighthouse'] });
+  h.start();
+  await h.search('lighthouse');
+  const far = h.results.results.find(r => r.title === 'Far'), near = h.results.results.find(r => r.title === 'Near');
+  eq(far.here, false); eq(near.here, true);
+  const before = h.executed.length;
+  h.pick = 'Open transcript';
+  await h.send({ type: 'openResult', id: far.id, file: far.file });
+  eq(h.executed.length, before, 'not opened as a session'); eq(h.told.length, 1);
+  eq(h.opened[0].uri.fsPath, far.file);
+  await h.send({ type: 'openResult', id: near.id, file: near.file });
+  eq(h.executed.at(-1)[1], near.id);
+});
+
+withHarness('ask: says it is working at once, and a second click while it works is ignored', async h => {
+  past(h, 'a', { title: 'A', you: ['the harbor'] });
+  h.start();
+  h.askReply = { answer: 'In A.', sources: [{ session: 1, quote: 'the harbor' }] };
+  require('fs').writeFileSync(require('path').join(h.home, 'ask-reply.json'), JSON.stringify({ body: h.askReply, exit: 0 }));
+  const first = h.send({ type: 'ask', q: 'harbor', all: true });
+  const second = h.send({ type: 'ask', q: 'harbor', all: true });
+  await Promise.all([first, second]);
+  const answers = h.posted.filter(m => m.type === 'answer');
+  same(answers.map(a => a.state), ['working', 'done']);
+  eq(answers[0].all, true);
+});
+
+withHarness('search: a title holding every word beats a long session full of them', async h => {
+  past(h, 'long', { title: 'Runner work', you: Array.from({ length: 30 }, () => 'the lane cost check again, per lane'), claude: Array.from({ length: 30 }, () => 'cost per lane check done') });
+  past(h, 'exact', { title: 'Cost per check by lane', you: ['go'] });
+  h.start();
+  same((await h.search('cost per check lane'))[0], 'Cost per check by lane');
+});
+
+withHarness('search: a rare word counts for more than a word most sessions use', async h => {
+  for (const n of ['f1', 'f2', 'f3']) past(h, n, { title: n, you: ['an apple a day'] });
+  past(h, 'common', { title: 'Common', you: ['apple apple apple'] });
+  past(h, 'rare', { title: 'Rare', you: ['one quince'] });
+  h.start();
+  same((await h.search('apple quince'))[0], 'Rare');
+});
+
+withHarness('search: every word once beats one word everywhere', async h => {
+  past(h, 'one', { title: 'Crane', you: ['crane crane crane crane'], claude: ['crane crane'] });
+  past(h, 'both', { title: 'Birds', you: ['go'], claude: ['a crane and a heron'] });
+  h.start();
+  same((await h.search('crane heron'))[0], 'Birds');
 });

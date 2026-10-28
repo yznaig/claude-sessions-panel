@@ -257,7 +257,7 @@
   const STATUS = { busy: 'running', idle: 'idle', waiting: 'needs you', asleep: 'asleep', ended: 'ended' };
   function resultRow(r) {
     const d = el('div', 'hit');
-    d.title = r.cwd + '\n' + r.id + '\nClick to open' + (r.status === 'asleep' ? ' (wakes it)' : '');
+    d.title = r.cwd + '\n' + r.id + (r.here ? '\nClick to open' + (r.status === 'asleep' ? ' (wakes it)' : '') : '\nFrom another Claude login or the Windows side: click to read its transcript');
     const top = el('div', 'hittop');
     top.appendChild(el('span', 'dot ' + (r.status === 'ended' ? 'offline' : r.status)));
     top.appendChild(el('span', 'name', r.title));
@@ -271,12 +271,12 @@
       line.appendChild(marked(r.snippet, r.marks));
       d.appendChild(line);
     }
-    d.addEventListener('click', () => post({ type: 'focus', id: r.id }));
+    d.addEventListener('click', () => post({ type: 'openResult', id: r.id, file: r.file }));
     return d;
   }
   function drawAnswer(wrap) {
     const a = search.answer;
-    if (!a || a.q !== search.q) return;
+    if (!a || a.q !== search.q || a.all !== search.all) return;
     const card = el('div', 'answer ' + a.state);
     if (a.state === 'working') card.appendChild(el('div', '', 'Asking Claude… (10–30 seconds)'));
     else if (a.state === 'none') card.appendChild(el('div', '', 'Claude didn\'t find an answer in the best matches. Try other words, or look through the results below.'));
@@ -289,7 +289,7 @@
         src.appendChild(el('span', 'repo', s.repo));
         if (s.quote) src.appendChild(el('div', 'quote', '“' + s.quote + '”'));
         src.title = 'Click to open this session';
-        src.addEventListener('click', () => post({ type: 'focus', id: s.id }));
+        src.addEventListener('click', () => post({ type: 'openResult', id: s.id, file: s.file }));
         card.appendChild(src);
       }
     }

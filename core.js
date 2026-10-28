@@ -271,6 +271,7 @@ class Provider {
         await this.onFolderMessage(m); break;
       case 'search': await this.find(m.q, m.all); return;
       case 'ask': await this.ask(m.q, m.all); return;
+      case 'openResult': await this.openResult(m.id, m.file); return;
     }
     this.push();
   }
@@ -281,8 +282,20 @@ class Provider {
 
   // Results with each session's state now: running, asleep, or ended.
   results(q, all, limit) {
+    const own = path.join(path.dirname(sessionsDir()), 'projects') + path.sep;
     return this.index.search(q, { shows: this.shows(all), limit })
-      .map(r => ({ ...r, status: this.list.statusOf(r.id) || 'ended' }));
+      .map(r => ({ ...r, status: this.list.statusOf(r.id) || 'ended', here: r.file.startsWith(own) }));
+  }
+
+  // A result opens as a session when Claude Code here keeps it; one from another Claude login or the
+  // Windows side can only be read, so its transcript is offered instead.
+  async openResult(id, file) {
+    const own = path.join(path.dirname(sessionsDir()), 'projects') + path.sep;
+    if (!file || file.startsWith(own)) { await this.onMessage({ type: 'focus', id }); return; }
+    const pick = await vscode.window.showInformationMessage(
+      `That session was saved by another Claude login or the Windows side (${path.dirname(path.dirname(file))}), so Claude Code here can't open it.`,
+      'Open transcript');
+    if (pick === 'Open transcript') await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.file(file)), { preview: true });
   }
 
   async find(q, all) {
@@ -302,17 +315,22 @@ class Provider {
 
   // Ask Claude: one headless call over the best matches (or the most recent sessions when few match).
   async ask(q, all) {
+    if (this.asking) return; // one at a time
+    this.asking = true;
+    try { await this.askNow(q, all); } finally { this.asking = false; }
+  }
+  async askNow(q, all) {
+    this.post({ type: 'answer', q, all, state: 'working', text: '', sources: [] });
     await this.index.update();
     let results = this.results(q, all, 15);
     if (results.length < 5) {
       const have = new Set(results.map(r => r.id));
       results = results.concat(this.index.recent(10, this.shows(all)).filter(r => !have.has(r.id))).slice(0, 15);
     }
-    this.post({ type: 'answer', q, state: 'working', text: '', sources: [] });
     const answer = results.length
       ? await runAsk(askPrompt(q, results, this.index)).then(out => (out.error ? { state: 'error', text: out.error, sources: [] } : readAnswer(out.text, results)))
       : { state: 'none', text: '', sources: [] };
-    this.post({ type: 'answer', q, ...answer });
+    this.post({ type: 'answer', q, all, ...answer });
   }
 
   // The X: off the list and its process stopped. A session working or waiting on you asks first.

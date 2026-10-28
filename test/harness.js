@@ -18,6 +18,7 @@ const vscodeStub = {
   workspace: {
     get workspaceFolders() { return current.folders.length ? current.folders.map(f => ({ uri: { fsPath: f } })) : undefined; },
     getConfiguration: () => ({ get: k => current.config[k], update: async (k, v) => { current.config[k] = v; } }),
+    openTextDocument: async uri => ({ uri }),
     onDidChangeConfiguration: () => ({ dispose() {} }),
   },
   window: {
@@ -35,6 +36,8 @@ const vscodeStub = {
     },
     showErrorMessage: () => {},
     setStatusBarMessage() {},
+    showInformationMessage: async (msg, ...rest) => { current.told.push(msg); return current.pick; },
+    showTextDocument: async doc => { current.opened.push(doc); },
     createQuickPick() { throw new Error('not in tests'); },
   },
   commands: {
@@ -142,6 +145,9 @@ let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
     this.answers = [];
     this.refused = [];
     this.asked = [];
+    this.told = [];
+    this.opened = [];
+    this.pick = undefined;
     this.confirm = 'Delete';
     this.sounds = [];
     this.executed = [];
