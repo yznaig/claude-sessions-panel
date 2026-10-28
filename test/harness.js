@@ -92,6 +92,10 @@ const lines = {
   customTitle: t => J({ type: 'custom-title', customTitle: t }),
   skill: name => J({ type: 'assistant', isSidechain: false, message: { content: [{ type: 'tool_use', name: 'Skill', input: { skill: name } }] } }),
   stamped: (t, at) => J({ type: 'assistant', isSidechain: false, timestamp: new Date(at).toISOString(), message: { content: [{ type: 'text', text: t }] } }),
+  // Lines as Claude Code writes them in full, for search: where, when, and how the session was started.
+  said: (t, { cwd, at, entry = 'claude-vscode', uuid } = {}) => J({ type: 'user', isSidechain: false, cwd, entrypoint: entry, uuid, timestamp: at && new Date(at).toISOString(), message: { role: 'user', content: t } }),
+  replied: (t, { cwd, at } = {}) => J({ type: 'assistant', isSidechain: false, cwd, timestamp: at && new Date(at).toISOString(), message: { content: [{ type: 'text', text: t }] } }),
+  edited: file => J({ type: 'assistant', isSidechain: false, message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: file } }] } }),
 };
 const words = n => Array.from({ length: n }, (_, i) => 'w' + i).join(' ');
 
@@ -118,7 +122,21 @@ class Harness {
       sessionsDir: path.join(this.home, '.claude/sessions'), removedClearHours: 12, autoCloseHours: 4,
       'sound.enabled': true, 'sound.ready': path.join(this.home, 'ready.wav'), 'sound.waiting': path.join(this.home, 'waiting.wav'),
       focusCommand: 'claude-vscode.editor.open',
+      searchFolders: [path.join(this.home, '.claude/projects')],
+      askCommand: path.join(this.home, 'fake-claude'),
     };
+    // A stand-in for `claude -p`: records its arguments and what it was sent, prints this.askReply.
+    this.askReply = { answer: null, sources: [] };
+    this.askExit = 0;
+    fs.writeFileSync(this.config.askCommand, `#!/usr/bin/env node
+const fs = require('fs'); const dir = ${J(this.home)};
+let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
+  fs.writeFileSync(dir + '/ask-input.txt', input); fs.writeFileSync(dir + '/ask-args.json', JSON.stringify(process.argv.slice(2)));
+  const reply = JSON.parse(fs.readFileSync(dir + '/ask-reply.json', 'utf8'));
+  process.stdout.write(JSON.stringify({ type: 'result', is_error: reply.exit !== 0, result: JSON.stringify(reply.body) }));
+  process.exit(reply.exit);
+});
+`, { mode: 0o755 });
     this.globalState = memento();
     this.workspaceState = memento();
     this.answers = [];
@@ -253,7 +271,21 @@ class Harness {
   refresh() { this.commands.get('claudeSessions.refresh')(); return this; }
   async send(m) { await this.onMessage(m); return this; }
 
-  get state() { return this.posted[this.posted.length - 1]; }
+  get state() { return this.posted.filter(m => m.type === 'state').at(-1); }
+  get results() { return this.posted.filter(m => m.type === 'results').at(-1); }
+  get answer() { return this.posted.filter(m => m.type === 'answer').at(-1); }
+  // Search as the panel's box does; returns the result titles in order.
+  async search(q, all = true) {
+    await this.send({ type: 'search', q, all });
+    return this.results.results.map(r => r.title);
+  }
+  async ask(q) {
+    fs.writeFileSync(path.join(this.home, 'ask-reply.json'), J({ body: this.askReply, exit: this.askExit }));
+    await this.send({ type: 'ask', q, all: true });
+    return this.answer;
+  }
+  get askInput() { return fs.readFileSync(path.join(this.home, 'ask-input.txt'), 'utf8'); }
+  get askArgs() { return JSON.parse(fs.readFileSync(path.join(this.home, 'ask-args.json'), 'utf8')); }
   get rows() { return this.state.rows; }
   get badge() { return this.panel.badge ? this.panel.badge.value : 0; }
   row(name) { return this.rows.find(r => r.id === this.id(name)); }

@@ -5,6 +5,7 @@
   const bar = document.getElementById('bar');
   const list = document.getElementById('list');
   const dismissedEl = document.getElementById('dismissed');
+  const searchEl = document.getElementById('search');
   const DRAG_TYPE = 'application/x-claude-session';
   let state = null;
   let menu = null;
@@ -200,8 +201,13 @@
       ? 'You are marked away. Click to mark yourself back; clicking any session does too.'
       : 'Mark yourself away (a long stretch or overnight). Clicking any session marks you back.';
     moon.addEventListener('click', () => post({ type: 'toggleAway' }));
+    const find = el('button', 'find' + (search.open ? ' on' : ''), '🔍');
+    find.title = 'Search every session (Ctrl+Alt+F)';
+    find.addEventListener('click', () => (search.open ? closeSearch() : openSearch()));
+    bar.appendChild(find);
     bar.appendChild(moon);
     bar.appendChild(el('span', '', state.soundOn ? '🔔 sounds on' : '🔕 sounds off'));
+    list.hidden = dismissedEl.hidden = search.open;
     list.replaceChildren();
     if (!shown.length) {
       let msg = 'No live Claude sessions here. Start one and it appears when it first runs.';
@@ -223,7 +229,129 @@
     }
   }
 
-  window.addEventListener('message', ev => { if (ev.data && ev.data.type === 'state') { state = ev.data; render(); } });
+  // ---- search: a box over every session, and Ask Claude ----
+  // The box and its results live in #search, drawn only when they change, so typing is never
+  // interrupted by the list's own updates.
+  const search = { open: false, q: '', all: true, results: null, answer: null, timer: null };
+  let box = null;
+  function openSearch() {
+    search.open = true;
+    drawSearch();
+    render();
+    box.focus(); box.select();
+  }
+  function closeSearch() { search.open = false; drawSearch(); render(); }
+  function runSearch() { if (search.q.trim()) post({ type: 'search', q: search.q, all: search.all }); else { search.results = null; drawResults(); } }
+  function marked(text, marks) {
+    const span = el('span', 'snip');
+    let at = 0;
+    for (const [s, e] of marks || []) {
+      if (s < at) continue;
+      span.appendChild(document.createTextNode(text.slice(at, s)));
+      span.appendChild(el('mark', '', text.slice(s, e)));
+      at = e;
+    }
+    span.appendChild(document.createTextNode(text.slice(at)));
+    return span;
+  }
+  const STATUS = { busy: 'running', idle: 'idle', waiting: 'needs you', asleep: 'asleep', ended: 'ended' };
+  function resultRow(r) {
+    const d = el('div', 'hit');
+    d.title = r.cwd + '\n' + r.id + '\nClick to open' + (r.status === 'asleep' ? ' (wakes it)' : '');
+    const top = el('div', 'hittop');
+    top.appendChild(el('span', 'dot ' + (r.status === 'ended' ? 'offline' : r.status)));
+    top.appendChild(el('span', 'name', r.title));
+    top.appendChild(el('span', 'repo', r.repo));
+    top.appendChild(el('span', 'state ' + r.status, STATUS[r.status] || r.status));
+    top.appendChild(el('span', 'age', age(Date.now() - r.end)));
+    d.appendChild(top);
+    if (r.snippet) {
+      const line = el('div', 'hitline');
+      line.appendChild(el('span', 'who', r.where === 'you' ? 'you:' : r.where === 'Claude' ? 'Claude:' : r.where + ':'));
+      line.appendChild(marked(r.snippet, r.marks));
+      d.appendChild(line);
+    }
+    d.addEventListener('click', () => post({ type: 'focus', id: r.id }));
+    return d;
+  }
+  function drawAnswer(wrap) {
+    const a = search.answer;
+    if (!a || a.q !== search.q) return;
+    const card = el('div', 'answer ' + a.state);
+    if (a.state === 'working') card.appendChild(el('div', '', 'Asking Claude… (10–30 seconds)'));
+    else if (a.state === 'none') card.appendChild(el('div', '', 'Claude didn\'t find an answer in the best matches. Try other words, or look through the results below.'));
+    else if (a.state === 'error') card.appendChild(el('div', '', a.text));
+    else {
+      card.appendChild(el('div', 'atext', a.text));
+      for (const s of a.sources) {
+        const src = el('div', 'source');
+        src.appendChild(el('span', 'name', s.title));
+        src.appendChild(el('span', 'repo', s.repo));
+        if (s.quote) src.appendChild(el('div', 'quote', '“' + s.quote + '”'));
+        src.title = 'Click to open this session';
+        src.addEventListener('click', () => post({ type: 'focus', id: s.id }));
+        card.appendChild(src);
+      }
+    }
+    wrap.appendChild(card);
+  }
+  function drawResults() {
+    const wrap = searchEl.querySelector('.hits');
+    if (!wrap) return;
+    wrap.replaceChildren();
+    drawAnswer(wrap);
+    const m = search.results;
+    if (!m || m.q !== search.q || m.all !== search.all) {
+      if (!search.q.trim()) wrap.appendChild(el('div', 'empty', 'Words or "a phrase": titles, what you said, Claude\'s replies, files touched. Or ask a question and press Ask Claude.'));
+      return;
+    }
+    if (m.progress) wrap.appendChild(el('div', 'empty', `Indexing your sessions… ${m.progress.done} of ${m.progress.total}`));
+    if (!m.results.length && !m.progress) wrap.appendChild(el('div', 'empty', 'No session mentions that. Try fewer words, or Ask Claude.'));
+    for (const r of m.results) wrap.appendChild(resultRow(r));
+  }
+  function drawSearch() {
+    searchEl.hidden = !search.open;
+    if (!search.open) { searchEl.replaceChildren(); box = null; return; }
+    if (box) { drawResults(); return; }
+    searchEl.replaceChildren();
+    const row = el('div', 'sbar');
+    box = el('input', 'sbox');
+    box.type = 'text'; box.placeholder = 'Search your sessions…'; box.value = search.q;
+    box.addEventListener('input', () => {
+      search.q = box.value;
+      clearTimeout(search.timer);
+      search.timer = setTimeout(runSearch, 150);
+    });
+    box.addEventListener('keydown', ev => {
+      if (ev.key === 'Escape') { ev.preventDefault(); closeSearch(); }
+      if (ev.key === 'Enter') { clearTimeout(search.timer); runSearch(); }
+    });
+    row.appendChild(box);
+    const scope = el('button', '', search.all ? 'All sessions' : 'This window');
+    scope.title = 'Search every session on this machine, or only this window\'s';
+    scope.addEventListener('click', () => { search.all = !search.all; scope.textContent = search.all ? 'All sessions' : 'This window'; runSearch(); });
+    row.appendChild(scope);
+    const ask = el('button', 'ask', 'Ask Claude ✦');
+    ask.title = 'Claude reads the best matches and answers your question, with the sessions it came from (10–30 s, uses your Claude plan)';
+    ask.addEventListener('click', () => { if (search.q.trim()) post({ type: 'ask', q: search.q, all: search.all }); });
+    row.appendChild(ask);
+    const x = el('button', 'x', '✕');
+    x.title = 'Close search (Esc)';
+    x.addEventListener('click', closeSearch);
+    row.appendChild(x);
+    searchEl.appendChild(row);
+    searchEl.appendChild(el('div', 'hits'));
+    drawResults();
+  }
+
+  window.addEventListener('message', ev => {
+    const m = ev.data;
+    if (!m) return;
+    if (m.type === 'state') { state = m; render(); }
+    else if (m.type === 'results') { search.results = m; drawResults(); }
+    else if (m.type === 'answer') { search.answer = m; drawResults(); }
+    else if (m.type === 'openSearch') openSearch();
+  });
   setInterval(() => { if (state) { state.now += 15000; render(); } }, 15000);
   post({ type: 'ready' });
 })();

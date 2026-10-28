@@ -70,6 +70,30 @@ h4 { margin: 10px 0 4px; font-weight: 600; color: var(--vscode-descriptionForegr
 .row:hover .star { opacity: 0.8; }
 .row .star:hover { opacity: 1; }
 
+/* search */
+#bar button.find { border-color: transparent; opacity: 0.7; }
+#bar button.find:hover, #bar button.find.on { opacity: 1; }
+.sbar { display: flex; gap: 6px; align-items: center; padding: 0 0 6px; }
+.sbar button { background: none; border: 1px solid var(--vscode-button-secondaryBackground); color: var(--vscode-foreground); border-radius: 3px; padding: 2px 8px; cursor: pointer; font: inherit; font-size: 0.9em; white-space: nowrap; }
+.sbar button:hover { background: var(--vscode-toolbar-hoverBackground); }
+.sbar button.ask { border-color: var(--vscode-charts-purple, #b180d7); }
+.sbar button.x { border: none; }
+.sbox { flex: 1; min-width: 80px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, #444)); border-radius: 3px; padding: 3px 6px; font: inherit; outline: none; }
+.sbox:focus { border-color: var(--vscode-focusBorder, #0078d4); }
+.hit { padding: 4px 6px; border-radius: 4px; cursor: pointer; }
+.hit:hover { background: var(--vscode-list-hoverBackground); }
+.hittop { display: grid; grid-template-columns: 14px minmax(120px, 1fr) auto minmax(64px, auto) 40px; gap: 8px; align-items: center; }
+.hitline { margin: 1px 0 0 22px; font-size: 0.9em; color: var(--vscode-descriptionForeground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hitline .who { margin-right: 6px; opacity: 0.8; }
+.hitline mark { background: color-mix(in srgb, var(--vscode-editor-findMatchHighlightBackground, #ea5c0055) 100%, transparent); color: inherit; border-radius: 2px; }
+.state.ended { color: var(--vscode-descriptionForeground); font-style: italic; }
+.answer { margin: 0 0 8px; padding: 6px 10px; border-left: 3px solid var(--vscode-charts-purple, #b180d7); background: color-mix(in srgb, var(--vscode-charts-purple, #b180d7) 10%, transparent); border-radius: 3px; }
+.answer.error { border-left-color: var(--vscode-errorForeground, #f48771); }
+.answer .atext { margin-bottom: 4px; }
+.answer .source { padding: 3px 0; cursor: pointer; display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.answer .source:hover .name { text-decoration: underline; }
+.answer .quote { flex-basis: 100%; font-size: 0.9em; color: var(--vscode-descriptionForeground); font-style: italic; }
+
 /* the moon: away for a long stretch */
 #bar button.moon { border-color: transparent; opacity: 0.6; }
 #bar button.moon:hover { opacity: 1; }

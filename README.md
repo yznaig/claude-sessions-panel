@@ -15,6 +15,7 @@ A VS Code panel tab (next to Terminal) that lists your live Claude Code sessions
 - **The list survives a restart.** Sessions listed when VS Code closes come back as dim **not running** rows; click one to reopen it, and it turns back into a live row. A session you end while VS Code keeps running leaves the list as before.
 - **Alt+Q** jumps back to the session you looked at before this one. Keep pressing to walk further back; **Alt+Shift+Q** walks forward again. Switching to a session yourself starts a fresh walk from there. It needs the companion mod below.
 - **Alt+A** asks an aside about whatever you highlighted in a Claude reply: select the text, press Alt+A, and the session on screen opens a side question on it above its prompt box, answered from a fork of the conversation. Your clipboard is left as it was. It needs the `side-fork` mod in the session as well as the companion mod below.
+- **🔍 Search** (top bar, or Ctrl+Alt+F) searches every Claude Code session on the machine, running or long ended, from every `~/.claude*/projects` folder and the Windows side under WSL. Type words or "a phrase"; results come as you type, ranked by where the words turn up: the session's title counts most, then what you said, then files it touched, then Claude's final replies (tool output and Claude's working notes between tool calls are left out). Every word matching beats one word repeated, and recent sessions edge ahead. Each result shows the line that matched and who said it; click to open the session (an asleep one wakes). **All sessions / This window** narrows it. Sessions run in a scratchpad, headless runs and subagents are left out, and a fork shows once. **Ask Claude ✦** sends your question and excerpts of the 15 best matches (or the most recent sessions, when few match) to one `claude -p` call (Sonnet, no tools, nothing saved to your session list) and shows its short answer with the sessions and passages it came from; if the excerpts don't answer it, it says so. The index lives in `~/.claude/sessions-panel/search-index.json`: each transcript is read once, then only what was added.
 - **🌙 Moon** (top bar) marks you away for a long stretch or overnight: one switch for the whole machine, lit with the time it went on. Click it again, or click any session (or its star) in the panel, and you're back. It's kept in `~/.claude/sessions-panel/away.json` so any Claude session can read it without the panel open: `{"away": true, "since": <ms>, "sinceIso": "...", "changedAt": <ms>, "how": "moon" | "clicked a session"}`; no file means not away. It only records the state; nothing in the panel acts on it.
 - **This window / All windows** filters to sessions whose folder is inside this window's workspace. Two windows, two lists.
 - **Folders** file sessions away from the main list without losing them. Tabs along the top: **Main** holds every session not in a folder, then one tab per folder, each with a count, and **+** makes a new one. Move a session with its **⋯** button, by right-clicking it, or by dragging it onto a tab. A session is in one folder at most. Filed sessions stay there across restarts and windows, even when not running (a dim **not running** row; click to reopen), and new activity doesn't pull them out. A **Good to close** or **✕** still takes one out. A filed session that **needs you** still sounds and counts on the badge. One with a **response ready** stays quiet and puts a dot on its folder's tab instead. Right-click a folder's tab (or its **⋯** while it's open) to rename it or delete it; deleting sends its sessions back to Main. Folders are shared by every window; each window remembers which tab it shows.
@@ -48,12 +49,13 @@ Focusing a session calls the Claude Code extension's own `claude-vscode.editor.o
 | `transcript.js` | Reading transcripts: titles, "Good to close", the waiting reply and its time estimate. |
 | `window.js` | Which sessions belong to this window. |
 | `away.js` | The moon's file: read and write `away.json`. |
+| `search.js` | Search: the index over every transcript, ranking, snippets, and the Ask Claude request and answer. |
 | `usage.js` | The Usage view. |
 | `media/` | The webviews' scripts and styles. |
 
 ### Tests
 
-`npm test` runs `test/panel.test.js`: about 60 checks that drive the real code the way VS Code and the panel do (fake VS Code, stand-in session processes, real transcript files, a clock moved by hand) and check what the panel shows. Under a second; Linux or WSL, since session liveness is read from `/proc`.
+`npm test` runs `test/panel.test.js`: about 75 checks that drive the real code the way VS Code and the panel do (fake VS Code, stand-in session processes, real transcript files, a clock moved by hand) and check what the panel shows. Under a second; Linux or WSL, since session liveness is read from `/proc`.
 
 ## Install (from source)
 
@@ -98,6 +100,9 @@ It lists what it found, reads them (whole for a few, start and end for more, wit
 | `claudeSessions.sound.ready` | `success` | Green sound: bundled name or `.wav` path |
 | `claudeSessions.sound.waiting` | `chatUserActionRequired` | Blue sound: bundled name or `.wav` path |
 | `claudeSessions.focusCommand` | `claude-vscode.editor.open` | Command run on row click |
+| `claudeSessions.searchFolders` | (empty) | Transcript folders to search; empty means every `~/.claude*/projects` plus the Windows side under WSL |
+| `claudeSessions.askModel` | `sonnet` | Model Ask Claude uses |
+| `claudeSessions.askCommand` | (empty) | The `claude` command Ask Claude runs; empty finds it |
 
 Sounds play through PowerShell under WSL and on Windows, `afplay` on macOS, `paplay` elsewhere. Command **Claude Sessions: Play Test Sounds** checks them.
 

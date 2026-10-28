@@ -392,6 +392,13 @@ class SessionList {
     return true;
   }
 
+  // A session's state for search results: its live status, asleep, or null when not running.
+  statusOf(id) {
+    const r = this.reg(id);
+    if (r) return r.status || 'idle';
+    return this.asleep.has(id) ? 'asleep' : null;
+  }
+
   stopRisk(id) {
     const r = this.reg(id);
     if (!r || !this.stoppable(r)) return null;

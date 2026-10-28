@@ -57,6 +57,7 @@ const { displayName } = transcripts;
 const { SessionList } = require('./sessions');
 const { windowScope } = require('./window');
 const { readAway, writeAway } = require('./away');
+const { SearchIndex, askPrompt, readAnswer } = require('./search');
 
 // ---- sound ------------------------------------------------------------------
 
@@ -268,8 +269,50 @@ class Provider {
       case 'ready': break;
       case 'showFolder': case 'move': case 'newFolder': case 'renameFolder': case 'deleteFolder':
         await this.onFolderMessage(m); break;
+      case 'search': await this.find(m.q, m.all); return;
+      case 'ask': await this.ask(m.q, m.all); return;
     }
     this.push();
+  }
+
+  // ---- search (search.js) ----
+  post(m) { if (this.view) void this.view.webview.postMessage(m); }
+  shows(all) { return all ? undefined : cwd => this.scope.shows(cwd); }
+
+  // Results with each session's state now: running, asleep, or ended.
+  results(q, all, limit) {
+    return this.index.search(q, { shows: this.shows(all), limit })
+      .map(r => ({ ...r, status: this.list.statusOf(r.id) || 'ended' }));
+  }
+
+  async find(q, all) {
+    this.lastQuery = { q, all };
+    const building = this.index.update();
+    const p = this.index.progress;
+    // The first build takes a while: show what is indexed so far, and again when it is done.
+    if (p.total > 20 && p.done < p.total) {
+      this.post({ type: 'results', q, all, results: this.results(q, all), progress: { ...p } });
+      await building;
+      if (this.lastQuery && this.lastQuery.q === q && this.lastQuery.all === all) this.post({ type: 'results', q, all, results: this.results(q, all), progress: null });
+      return;
+    }
+    await building;
+    this.post({ type: 'results', q, all, results: this.results(q, all), progress: null });
+  }
+
+  // Ask Claude: one headless call over the best matches (or the most recent sessions when few match).
+  async ask(q, all) {
+    await this.index.update();
+    let results = this.results(q, all, 15);
+    if (results.length < 5) {
+      const have = new Set(results.map(r => r.id));
+      results = results.concat(this.index.recent(10, this.shows(all)).filter(r => !have.has(r.id))).slice(0, 15);
+    }
+    this.post({ type: 'answer', q, state: 'working', text: '', sources: [] });
+    const answer = results.length
+      ? await runAsk(askPrompt(q, results, this.index)).then(out => (out.error ? { state: 'error', text: out.error, sources: [] } : readAnswer(out.text, results)))
+      : { state: 'none', text: '', sources: [] };
+    this.post({ type: 'answer', q, ...answer });
   }
 
   // The X: off the list and its process stopped. A session working or waiting on you asks first.
@@ -314,6 +357,44 @@ class Provider {
       });
     }
   }
+}
+
+// `claude -p` with no tools, MCP servers or settings files, and nothing saved to the session list.
+function claudeCommand() {
+  const set = cfg().get('askCommand');
+  if (set) return set;
+  for (const p of [path.join(os.homedir(), '.local', 'bin', 'claude'), path.join(os.homedir(), '.claude', 'local', 'claude')]) if (fs.existsSync(p)) return p;
+  return 'claude';
+}
+function runAsk(prompt) {
+  return new Promise(resolve => {
+    const args = ['-p', '--no-session-persistence', '--model', cfg().get('askModel') || 'sonnet', '--tools', '',
+      '--strict-mcp-config', '--setting-sources', '', '--output-format', 'json'];
+    let child;
+    try {
+      child = require('child_process').execFile(claudeCommand(), args, { cwd: os.tmpdir(), timeout: 120e3, maxBuffer: 8 << 20 }, (err, stdout, stderr) => {
+        let out = null;
+        try { out = JSON.parse(stdout); } catch { /* not JSON */ }
+        if (out && !out.is_error && !err) return resolve({ text: out.result });
+        const why = (out && out.result) || String(stderr || '').trim() || (err && err.message) || 'no answer';
+        resolve({ error: `Claude could not answer: ${String(why).slice(0, 200)}` });
+      });
+    } catch (e) { resolve({ error: `Could not start claude (${e.message}).` }); return; }
+    child.stdin.on('error', () => {});
+    child.stdin.end(prompt);
+  });
+}
+
+function searchRoots() {
+  const set = cfg().get('searchFolders');
+  if (Array.isArray(set) && set.length) return set;
+  const home = os.homedir();
+  const out = [];
+  try { for (const d of fs.readdirSync(home)) if (d.startsWith('.claude')) out.push(path.join(home, d, 'projects')); } catch { /* none */ }
+  if (isWsl()) {
+    try { for (const u of fs.readdirSync('/mnt/c/Users')) out.push(path.join('/mnt/c/Users', u, '.claude', 'projects')); } catch { /* none */ }
+  }
+  return out.filter(p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
 }
 
 // Opens a session where Claude Code's "Preferred Location" setting says: the chat sidebar when it
@@ -364,7 +445,7 @@ function html(webview, rootUri) {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
 <link rel="stylesheet" href="${style}"><title>Claude Sessions</title></head>
-<body><div id="bar"></div><div id="list"></div><div id="dismissed"></div>
+<body><div id="bar"></div><div id="search" hidden></div><div id="list"></div><div id="dismissed"></div>
 <script nonce="${nonce}" src="${script}"></script></body></html>`;
 }
 
@@ -506,6 +587,9 @@ function start(host) {
   const look = () => { for (const kind of list.observe(readRegistry(), readTrail())) playSound(kind); };
   const provider = new Provider(context, list, vscode.Uri.file(host.root), host.carried);
   provider.look = look;
+  provider.scope = scope;
+  provider.index = new SearchIndex({ roots: searchRoots, cacheFile: path.join(snapshotDir(), 'search-index.json'), now: () => Date.now() });
+  void provider.index.update(); // build in the background, so the first search is quick
   const history = new History(look, list, scope);
   subs.push({ dispose: () => provider.detach() });
 
@@ -540,6 +624,10 @@ function start(host) {
     vscode.commands.registerCommand('claudeSessions.goBack', () => history.step(-1)),
     vscode.commands.registerCommand('claudeSessions.goForward', () => history.step(1)),
     vscode.commands.registerCommand('claudeSessions.askAside', () => askAside(history)),
+    vscode.commands.registerCommand('claudeSessions.search', async () => {
+      await vscode.commands.executeCommand('claudeSessions.view.focus');
+      provider.post({ type: 'openSearch' });
+    }),
   );
 
   if (host.view) provider.resolveWebviewView(host.view);
@@ -547,6 +635,7 @@ function start(host) {
     attach: view => provider.resolveWebviewView(view),
     stop() {
       for (const s of subs.splice(0)) { try { s.dispose(); } catch { /* keep going */ } }
+      if (provider.index) provider.index.flush();
       return { ...list.handOver(), showDismissed: provider.showDismissed };
     },
   };

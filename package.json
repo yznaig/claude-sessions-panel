@@ -2,7 +2,7 @@
   "name": "claude-sessions-panel",
   "displayName": "Claude Sessions",
   "description": "A bottom-panel tab listing your live Claude Code sessions: running, response ready (green), needs an answer (blue). Click to focus the session. Plus a Usage view: the current usage windows of every Claude Code and Codex login on the machine.",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "publisher": "yznaig",
   "license": "MIT",
   "author": "yznaig",
@@ -115,6 +115,11 @@
         "category": "Claude Sessions"
       },
       {
+        "command": "claudeSessions.search",
+        "title": "Search Sessions",
+        "category": "Claude Sessions"
+      },
+      {
         "command": "claudeSessions.refreshUsage",
         "title": "Refresh Usage",
         "category": "Claude Sessions",
@@ -169,6 +174,22 @@
           "minimum": 0,
           "description": "Stop a Claude Code session's process after this many hours with no activity, to free its memory. It stays on the list as asleep; click it to wake it. Never stops a session that is working, waiting for you, running a background command, or marked Keep running. 0 turns it off."
         },
+        "claudeSessions.searchFolders": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Folders of Claude Code transcripts to search. Empty means every ~/.claude*/projects, plus the Windows side under WSL."
+        },
+        "claudeSessions.askModel": {
+          "type": "string",
+          "default": "sonnet",
+          "description": "Model Ask Claude uses to answer a search question (a claude --model name)."
+        },
+        "claudeSessions.askCommand": {
+          "type": "string",
+          "default": "",
+          "description": "The claude command Ask Claude runs. Empty finds it (~/.local/bin/claude, then PATH)."
+        },
         "claudeSessions.sound.enabled": {
           "type": "boolean",
           "default": true,
@@ -203,6 +224,10 @@
       {
         "command": "claudeSessions.askAside",
         "key": "alt+a"
+      },
+      {
+        "command": "claudeSessions.search",
+        "key": "ctrl+alt+f"
       }
     ]
   },

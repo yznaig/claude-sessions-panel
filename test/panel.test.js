@@ -647,3 +647,149 @@ withHarness("an asleep record outlasts a window that doesn't list the session ye
   h.globalState.update(OPEN_KEY, [{ id, cwd: h.other, name: 'far', since: h.now, startedAt: h.now }]);
   return h.send({ type: 'toggleAll' }).then(() => { h.step(); eq(h.row('far').status, 'asleep'); });
 });
+
+// ---- search ------------------------------------------------------------------
+
+const DAY = 24 * H;
+// A finished session on disk: a title, what you said, what Claude replied, files it touched.
+function past(h, name, { title = name, you = [], claude = [], files = [], cwd, at, entry, uuid } = {}) {
+  cwd = cwd || h.proj; at = at || h.now - DAY;
+  const ls = [L.customTitle(title)];
+  you.forEach((t, i) => {
+    ls.push(L.said(t, { cwd, at, entry, uuid: i === 0 ? uuid : undefined }));
+    if (claude[i]) ls.push(L.replied(claude[i], { cwd, at }));
+  });
+  for (const f of files) ls.push(L.edited(f));
+  h.transcript(name, ls, cwd);
+}
+
+withHarness('search: finds a session by its title, your words, Claude\'s reply, or a file it touched', async h => {
+  past(h, 'a', { title: 'Moon placement', you: ['hello'] });
+  past(h, 'b', { title: 'B', you: ['where should the ladder go'] });
+  past(h, 'c', { title: 'C', you: ['go'], claude: ['the gizmo lives in the drawer'] });
+  past(h, 'd', { title: 'D', you: ['go'], files: ['/repo/src/widget-frame.ts'] });
+  h.start();
+  same(await h.search('moon'), ['Moon placement']);
+  same(await h.search('ladder'), ['B']);
+  same(await h.search('gizmo'), ['C']);
+  same(await h.search('widget-frame'), ['D']);
+  const r = h.results.results[0];
+  eq(r.id, h.id('d')); eq(r.where, 'file');
+});
+
+withHarness('search: title beats your words beats Claude\'s reply; every word beats one word repeated', async h => {
+  past(h, 'reply', { title: 'R', you: ['go'], claude: ['zebra'] });
+  past(h, 'said', { title: 'S', you: ['zebra'] });
+  past(h, 'titled', { title: 'Zebra notes', you: ['go'] });
+  past(h, 'one', { title: 'One', you: ['crane crane crane crane crane'] });
+  past(h, 'both', { title: 'Both', you: ['crane and heron'] });
+  h.start();
+  same(await h.search('zebra'), ['Zebra notes', 'S', 'R']);
+  same((await h.search('crane heron'))[0], 'Both');
+});
+
+withHarness('search: "quoted phrases" match as a whole; newer sessions first when equal', async h => {
+  past(h, 'old', { title: 'Old', you: ['the red door'], at: h.now - 30 * DAY });
+  past(h, 'new', { title: 'New', you: ['the red door'], at: h.now - DAY });
+  past(h, 'apart', { title: 'Apart', you: ['red paint on the door'] });
+  h.start();
+  same(await h.search('"red door"'), ['New', 'Old']);
+});
+
+withHarness('search: the snippet shows the matching words, and who said them', async h => {
+  past(h, 'a', { title: 'A', you: ['first a long preamble about nothing in particular, then: rotate the signing keys every quarter please'] });
+  h.start();
+  await h.search('signing keys');
+  const r = h.results.results[0];
+  eq(r.where, 'you');
+  assert.ok(r.snippet.includes('rotate the signing keys'), r.snippet);
+  same(r.marks.map(([s, e]) => r.snippet.slice(s, e).toLowerCase()).sort(), ['keys', 'signing']);
+});
+
+withHarness('search: leaves out throwaway runs, headless runs and subagents', async h => {
+  past(h, 'real', { title: 'Real', you: ['find the walrus'] });
+  past(h, 'tmp', { title: 'Tmp', you: ['find the walrus'], cwd: '/tmp/claude-1001/-home-x/abc/scratchpad/probe' });
+  past(h, 'headless', { title: 'Headless', you: ['find the walrus'], entry: 'sdk-cli' });
+  const sub = require('path').join(h.home, '.claude/projects', h.proj.replace(/[^a-zA-Z0-9]/g, '-'), h.id('real'), 'subagents');
+  require('fs').mkdirSync(sub, { recursive: true });
+  require('fs').writeFileSync(require('path').join(sub, 'agent-1.jsonl'), L.said('find the walrus', { cwd: h.proj }) + '\n');
+  h.start();
+  same(await h.search('walrus'), ['Real']);
+});
+
+withHarness('search: a fork and the session it came from show once, the one that went furthest', async h => {
+  past(h, 'parent', { title: 'Parent', you: ['plan the otter migration'], uuid: 'u-1', at: h.now - 2 * DAY });
+  past(h, 'fork', { title: 'Parent (fork)', you: ['plan the otter migration', 'and then more'], uuid: 'u-1' });
+  h.start();
+  same(await h.search('otter'), ['Parent (fork)']);
+});
+
+withHarness('search: new words in a session are found on the next search; the index is kept for the next start', async h => {
+  past(h, 'a', { title: 'A', you: ['nothing yet'] });
+  h.start();
+  same(await h.search('pelican'), []);
+  h.transcript('a', [L.said('now the pelican', { cwd: h.proj, at: h.now })]);
+  same(await h.search('pelican'), ['A']);
+  assert.ok(require('fs').existsSync(require('path').join(h.home, '.claude/sessions-panel/search-index.json')));
+  h.restart();
+  same(await h.search('pelican'), ['A']);
+});
+
+withHarness('search: this window only, or every session; results say which are running', async h => {
+  past(h, 'here', { title: 'Here', you: ['the beacon'] });
+  past(h, 'there', { title: 'There', you: ['the beacon'], cwd: h.other });
+  h.session('here');
+  h.start();
+  same((await h.search('beacon', true)).sort(), ['Here', 'There']);
+  same(await h.search('beacon', false), ['Here']);
+  eq(h.results.results[0].status, 'idle');
+  await h.send({ type: 'focus', id: h.id('there') });
+  eq(h.executed.at(-1)[1], h.id('there'));
+});
+
+// ---- ask Claude --------------------------------------------------------------
+
+withHarness('ask: Claude gets the question and the best matches, and its answer links the sessions', async h => {
+  past(h, 'moon', { title: 'Sessions panel folders', you: ['where should the moon go'], claude: ['One moon, top of panel'] });
+  past(h, 'other', { title: 'Unrelated', you: ['lunch plans'] });
+  h.start();
+  h.askReply = { answer: 'One moon at the top of the panel.', sources: [{ session: 1, quote: 'One moon, top of panel' }] };
+  const a = await h.ask('where did we put the moon');
+  eq(a.state, 'done'); eq(a.text, 'One moon at the top of the panel.');
+  same(a.sources.map(s => [s.id, s.title, s.quote]), [[h.id('moon'), 'Sessions panel folders', 'One moon, top of panel']]);
+  assert.ok(h.askInput.includes('where did we put the moon'));
+  assert.ok(h.askInput.includes('One moon, top of panel'));
+  for (const flag of ['-p', '--no-session-persistence', '--output-format']) assert.ok(h.askArgs.includes(flag), flag);
+});
+
+withHarness('ask: nothing found, or claude failing, says so', async h => {
+  past(h, 'a', { title: 'A', you: ['something'] });
+  h.start();
+  h.askReply = { answer: null, sources: [] };
+  eq((await h.ask('something')).state, 'none');
+  h.askExit = 1;
+  const a = await h.ask('something');
+  eq(a.state, 'error'); assert.ok(a.text);
+});
+
+withHarness('ask: a source number Claude made up is dropped', async h => {
+  past(h, 'a', { title: 'A', you: ['the harbor'] });
+  h.start();
+  h.askReply = { answer: 'It was in A.', sources: [{ session: 1, quote: 'the harbor' }, { session: 9, quote: 'invented' }] };
+  same((await h.ask('harbor')).sources.map(s => s.title), ['A']);
+});
+
+withHarness('search: a recent session edges out an older one that matches a little more', async h => {
+  past(h, 'old', { title: 'Old', you: ['the kestrel'], claude: ['a kestrel'], at: h.now - 60 * DAY });
+  past(h, 'new', { title: 'New', you: ['the kestrel'], at: h.now - DAY });
+  h.start();
+  same(await h.search('kestrel'), ['New', 'Old']);
+});
+
+withHarness("search: Claude's working notes before a tool call and subagent lines are not searched", async h => {
+  h.transcript('a', [L.customTitle('A'), L.said('go', { cwd: h.proj }), L.replied('checking the flamingo first', { cwd: h.proj }), L.tool(), L.result(), L.replied('done', { cwd: h.proj })]);
+  h.transcript('b', [L.customTitle('B'), L.said('go', { cwd: h.proj }), L.side('the flamingo is here')]);
+  h.start();
+  same(await h.search('flamingo'), []);
+  same(await h.search('done'), ['A']);
+});

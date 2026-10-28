@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.17.0 — 2026-10-28
+**Search every session.** 🔍 in the top bar (or Ctrl+Alt+F) opens a box over every Claude Code session on the machine, running or long ended: results as you type, ranked by where the words turn up (titles first, then what you said, files touched, Claude's final replies), with the matching line and who said it. Click one to open it, or wake it if asleep. **Ask Claude ✦** answers a vague question ("where did we decide where the moon goes?") from the best matches, with the sessions it came from and the passage that says so (one Sonnet call, 10–30 s, on your Claude plan). The index is kept in `~/.claude/sessions-panel/search-index.json`; the first build takes a few seconds in the background.
+
 ## 0.16.0 — 2026-10-27
 **Sessions stop when you're done with them.** The ✕ now also stops the session's process, asking first if it is working or waiting for you. A session quiet for 4 hours (setting `claudeSessions.autoCloseHours`, 0 = off) is stopped too but stays where it is on the list, dimmed as **asleep**, still green if its reply is unread; click it to wake it. Never stopped: sessions working, waiting for you, on screen, running a background command or subagent, in a terminal, or marked **Keep running** (⋯ menu, 📌). Every stop first checks the pid is still the session's and on this machine. Auto-close needs the session-trail mod (it is how the panel knows what is on screen); without it, only the ✕ stops sessions.
 
