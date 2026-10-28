@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.17.1 — 2026-10-28
+Session names get the room: every other column (repo, time chip, status, age) is now as wide as the widest thing in it, instead of a fixed width kept on every row, so names stop cutting off early in a narrow or zoomed panel.
+
 ## 0.17.0 — 2026-10-28
 **Search every session.** 🔍 in the top bar (or Ctrl+Alt+F) opens a box over every Claude Code session on the machine, running or long ended: results as you type, ranked by where the words turn up (titles first, then what you said, files touched, Claude's final replies), with the matching line and who said it. Click one to open it, or wake it if asleep. **Ask Claude ✦** answers a vague question ("where did we decide where the moon goes?") from the best matches, with the sessions it came from and the passage that says so (one Sonnet call, 10–30 s, on your Claude plan). The index is kept in `~/.claude/sessions-panel/search-index.json`; the first build takes a few seconds in the background.
 
