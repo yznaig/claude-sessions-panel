@@ -35,7 +35,7 @@ let busy = false
 async function hive($: EngineInterface, args: string[], stdin = ''): Promise<string> {
   const script = `${$.plugin.root}/skills/session-hive/scripts/hive.py`
   const self = await $.session.id()
-  const r = await $.process.run(['python3', '-I', script, '--self', self, ...args], { stdin, timeoutMs: 15000 })
+  const r = await $.process.run(['python3', '-I', script, '--self', self, ...args], { stdin, timeoutMs: 60000 })
   if (r.exitCode !== 0) throw new Error(`hive.py ${args[0]} exited ${r.exitCode}: ${r.stderr.slice(0, 300)}`)
   return r.stdout
 }

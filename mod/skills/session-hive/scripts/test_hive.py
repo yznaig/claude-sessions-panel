@@ -33,11 +33,36 @@ class Hive(unittest.TestCase):
             for r in records:
                 f.write(json.dumps(r) + '\n')
 
-    def run_hive(self, *args, stdin='', self_id='me-0001'):
-        env = dict(os.environ, HOME=self.home)
+    def fake_claude(self):
+        """A stand-in for `claude --bg` that records its arguments and answers as the real one does."""
+        self.spawned = os.path.join(self.home, 'spawned.ndjson')
+        path = os.path.join(self.home, 'fake-claude')
+        with open(path, 'w') as f:
+            f.write('#!/usr/bin/env python3\nimport json, os, sys\n'
+                    f'open({self.spawned!r}, "a").write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd()}}) + "\\n")\n'
+                    'print("backgrounded · abcd1234 · " + sys.argv[sys.argv.index("-n") + 1])\n')
+        os.chmod(path, 0o755)
+        return path
+
+    def spawns(self):
+        try:
+            with open(self.spawned) as f:
+                return [json.loads(l) for l in f]
+        except OSError:
+            return []
+
+    def set_away(self, on=True):
+        snaps = os.path.join(self.home, '.claude', 'sessions-panel')
+        os.makedirs(snaps, exist_ok=True)
+        with open(os.path.join(snaps, 'away.json'), 'w') as f:
+            json.dump({'away': on, 'since': int((time.time() - 60) * 1000) if on else None}, f)
+
+    def run_hive(self, *args, stdin='', self_id='me-0001', ok=True):
+        env = dict(os.environ, HOME=self.home, HIVE_CLAUDE=self.fake_claude())
         p = subprocess.run([sys.executable, '-I', HIVE, '--self', self_id, *args], input=stdin,
                            capture_output=True, text=True, env=env, timeout=30)
-        self.assertEqual(p.returncode, 0, p.stderr)
+        if ok:
+            self.assertEqual(p.returncode, 0, p.stderr)
         return p.stdout
 
     def receive(self, *args, sender='work-bb', text='Idea: a priority field would help the release notes.'):
@@ -184,6 +209,72 @@ class Hive(unittest.TestCase):
         p.kill()
         p.wait()
         self.assertEqual(self.claim('/work/repo/a.md')['action'], 'allow')
+
+
+    # --- sub-sessions ---
+
+    def spawn(self, name, *flags, who='me-0001', brief='Dig into the delay-notice drafts.'):
+        return json.loads(self.run_hive('spawn', '--name', name, *flags, stdin=brief, self_id=who, ok=False))
+
+    def test_a_sub_session_starts_in_the_background_knowing_its_parent(self):
+        r = self.spawn('notice drafts')
+        self.assertEqual(r, {'action': 'started', 'name': 'notice-drafts', 'id': 'abcd1234'})
+        argv = self.spawns()[0]['argv']
+        self.assertEqual(argv[:4], ['--bg', '-n', 'notice-drafts', '--'])
+        self.assertIn("a sub-session that work-aa started with the user's yes", argv[4])
+        self.assertIn('Debrief from sub-session notice-drafts', argv[4])
+        self.assertIn('Dig into the delay-notice drafts.', argv[4])
+        self.assertIn('work-aa started sub-session notice-drafts', self.run_hive('log'))
+
+    def make_peer_a_child(self):
+        os.makedirs(os.path.join(self.home, '.claude', 'session-hive'), exist_ok=True)
+        with open(os.path.join(self.home, '.claude', 'session-hive', 'children.json'), 'w') as f:
+            json.dump([{'name': 'work-bb', 'parent': 'work-aa', 'parentId': 'me-0001', 'at': time.time()}], f)
+
+    def test_a_taken_name_gets_a_number(self):
+        self.assertEqual(self.spawn('work-bb')['name'], 'work-bb-2')
+
+    def test_a_sub_session_cannot_start_its_own(self):
+        self.make_peer_a_child()
+        r = self.spawn('deeper', who='peer-0002')
+        self.assertEqual(r['action'], 'refused')
+        self.assertIn('cannot start their own', r['reason'])
+
+    def test_unattended_only_while_away_and_two_per_stretch_away(self):
+        self.assertIn('not away', self.spawn('a', '--unattended')['reason'])
+        self.set_away()
+        self.assertEqual(self.spawn('a', '--unattended')['action'], 'started')
+        self.assertEqual(self.spawn('b', '--unattended')['action'], 'started')
+        r = self.spawn('c', '--unattended')
+        self.assertEqual(r['action'], 'refused')
+        self.assertIn('already started 2', r['reason'])
+        self.assertIn('take on no new job', self.spawns()[0]['argv'][4])
+        self.assertEqual(self.spawn('d')['action'], 'started', "with the user's yes the cap does not apply")
+
+    def test_a_keep_going_note_to_a_long_session_starts_a_sub_session_while_away(self):
+        self.set_away()
+        text = '<cross-session-message from-name="work-bb">\n[keep going] the runner stalled on TICKET-5\n</cross-session-message>'
+        v = self.receive('--tokens', '450000', text=text)
+        self.assertEqual(v['action'], 'hold')
+        self.assertIn('started work-aa-cont', v['reason'])
+        self.assertIn('the runner stalled', self.spawns()[0]['argv'][4])
+        self.assertIn('digest me-0001', self.spawns()[0]['argv'][4])
+
+    def test_no_sub_session_without_the_marker_or_while_the_user_is_here(self):
+        self.receive('--tokens', '450000', text='[keep going] but the moon is off')
+        self.set_away()
+        self.receive('--tokens', '450000', text='an ordinary note')
+        self.assertEqual(self.spawns(), [])
+
+    def test_the_list_shows_sub_sessions_and_moved_threads(self):
+        self.make_peer_a_child()
+        self.run_hive('sent', '--to', 'work-bb', stdin='Thread moved: runner-lane design → work-aa\nDetails…')
+        out = self.run_hive('peers')
+        self.assertIn('sub-session of work-aa', out)
+        self.assertIn('threads moved out of it: runner-lane design → work-aa', out)
+        mine = self.run_hive('peers', self_id='peer-0002')
+        self.assertIn('You are a sub-session of **work-aa**', mine)
+        self.assertIn('A thread moved out of this session: runner-lane design → work-aa', mine)
 
 
 if __name__ == '__main__':

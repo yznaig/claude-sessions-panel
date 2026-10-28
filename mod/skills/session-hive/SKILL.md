@@ -15,6 +15,13 @@ The script is `scripts/hive.py` in this skill's folder; run it with `python3 -I`
 | Every live session on the machine | `peers --all` |
 | Messages between sessions, last 24 hours (`--hours N` for more) | `log` |
 | Messages that waited for this session instead of waking it | `held` (it leaves them in place; they reach the session with the user's next prompt) |
+| Start a sub-session for a side thread, after the user said yes | `spawn --name <short-name>`, the brief on stdin |
+
+**Sub-sessions.** `spawn` starts a live background session (`claude --bg`) in this session's folder. Its first message names its parent and asks it to send the parent a debrief (first line `Debrief from sub-session <name>: …`) and offer to close when done. It shows in the user's session list, where they can open and drive it, and in every session's startup list as "sub-session of …". Only one level: a sub-session's own `spawn` is refused. The brief should say what to do, what is already known, and where to look; the sub-session sees none of this conversation.
+
+**Without the user's yes** (`--unattended`, or automatically for a `[keep going]` note to a session too long to wake): only while the user has marked themselves away with the Claude Sessions panel's moon, at most 2 per session per stretch away, and only to continue work the user already approved. Anything else is refused with the reason.
+
+**Moving a thread.** A note whose first line is `Thread moved: <thread> → <session now holding it>` is a handoff; the session it was sent to sees it in its startup list and leaves that thread alone.
 
 Reading the list:
 - **busy / idle** comes from Claude Code's own process registry, and the token count from the session's last response.
