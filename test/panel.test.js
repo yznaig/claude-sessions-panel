@@ -793,3 +793,21 @@ withHarness("search: Claude's working notes before a tool call and subagent line
   same(await h.search('flamingo'), []);
   same(await h.search('done'), ['A']);
 });
+
+withHarness('ask: a question in plain words sends Claude the passages about it, not the first "where"', async h => {
+  past(h, 'moon', { title: 'Panel work', you: ['where should we start? and how long will it take', 'fine'],
+    claude: ['Where to begin: the folders. And how: tabs. ' + words(300), 'Decided: one moon button at the top of the panel; clicking a session turns it off.'] });
+  h.start();
+  h.askReply = { answer: 'x', sources: [] };
+  await h.ask('where did we decide to put the moon button and how does it turn off');
+  assert.ok(h.askInput.includes('one moon button at the top of the panel'), 'the passage about the moon');
+  same(require('../search').termsOf('where did we put the moon'), ['put', 'moon']);
+  same(require('../search').termsOf('where and how'), ['where', 'and', 'how'], 'only common words: keep them');
+});
+
+withHarness('ask: two quotes from one session show it once', async h => {
+  past(h, 'a', { title: 'A', you: ['the harbor'] });
+  h.start();
+  h.askReply = { answer: 'In A.', sources: [{ session: 1, quote: 'one' }, { session: 1, quote: 'two' }] };
+  same((await h.ask('harbor')).sources.map(s => [s.title, s.quote]), [['A', 'one … two']]);
+});

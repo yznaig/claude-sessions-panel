@@ -100,12 +100,21 @@ function scan(s, line) {
   }
 }
 
-// The words and "quoted phrases" of a query, lowercased.
+// Words a question is made of but a session is not found by.
+const COMMON = new Set(('the and for are but not you your yours our ours was were has have had did does doing done ' +
+  'what when where which who whom whose why how that this these those there here then than them they their ' +
+  'with from into onto about over under again also just like some any all can could would should will shall ' +
+  'its it\'s been being get got let make made say said tell told know think want need one ones way thing things ' +
+  'session sessions claude decide decided talk talked mention mentioned remember').split(' '));
+
+// The words and "quoted phrases" of a query, lowercased, without common words (unless that is all
+// there is).
 function termsOf(q) {
   const phrases = [...String(q).matchAll(/"([^"]+)"/g)].map(m => m[1].trim().toLowerCase()).filter(Boolean);
   const rest = String(q).replace(/"[^"]*"/g, ' ');
-  const words = (rest.match(/[\p{L}\p{N}_./-]{3,}/gu) || []).map(w => w.toLowerCase());
-  return [...new Set([...phrases, ...words])];
+  const words = (rest.match(/[\p{L}\p{N}_./'-]{3,}/gu) || []).map(w => w.toLowerCase());
+  const telling = words.filter(w => !COMMON.has(w));
+  return [...new Set([...phrases, ...(telling.length || phrases.length ? telling : words)])];
 }
 
 function count(hay, t) {
@@ -315,17 +324,27 @@ class SearchIndex {
     const s = this.sessions().find(x => x.id === id);
     if (!s) return '';
     const parts = [`First message: ${(s.prompts[0] || '').slice(0, 300)}`];
-    let left = budget;
-    const add = (who, text) => {
+    // The passages holding the most of the words, each cut around where they cluster.
+    const units = [];
+    const consider = (who, text) => {
       const low = text.toLowerCase();
-      const i = Math.min(...terms.map(t => low.indexOf(t)).filter(x => x >= 0));
-      if (!isFinite(i) || left <= 0) return;
-      const piece = text.slice(Math.max(0, i - 200), i + 400).replace(/\s+/g, ' ');
-      parts.push(`${who}: …${piece}…`);
-      left -= piece.length;
+      let best = null;
+      for (let at = 0; at < low.length; at += 300) {
+        const win = low.slice(Math.max(0, at - 300), at + 600);
+        const hits = terms.filter(t => win.includes(t)).length;
+        if (hits && (!best || hits > best.hits)) best = { hits, from: Math.max(0, at - 300) };
+      }
+      if (best) units.push({ who, hits: best.hits, piece: text.slice(best.from, best.from + 600).replace(/\s+/g, ' ') });
     };
-    for (const t of s.prompts) add('You', t);
-    for (const t of (s.reply ? [...s.replies, s.reply] : s.replies)) add('Claude', t);
+    for (const t of s.prompts) consider('You', t);
+    for (const t of (s.reply ? [...s.replies, s.reply] : s.replies)) consider('Claude', t);
+    units.sort((a, b) => b.hits - a.hits);
+    let left = budget;
+    for (const u of units) {
+      if (left <= 0) break;
+      parts.push(`${u.who}: …${u.piece}…`);
+      left -= u.piece.length;
+    }
     return parts.join('\n');
   }
 }
@@ -360,9 +379,15 @@ function readAnswer(text, results) {
   if (!body || !body.answer) return { state: 'none', text: '', sources: [] };
   const sources = (Array.isArray(body.sources) ? body.sources : [])
     .map(x => ({ r: results[Number(x && x.session) - 1], quote: String((x && x.quote) || '').slice(0, 300) }))
-    .filter(x => x.r)
-    .map(({ r, quote }) => ({ id: r.id, title: r.title, repo: r.repo, cwd: r.cwd, quote }));
-  return { state: 'done', text: String(body.answer), sources };
+    .filter(x => x.r);
+  // One entry per session, its quotes together.
+  const byId = new Map();
+  for (const { r, quote } of sources) {
+    const e = byId.get(r.id) || { id: r.id, title: r.title, repo: r.repo, cwd: r.cwd, quotes: [] };
+    if (quote) e.quotes.push(quote);
+    byId.set(r.id, e);
+  }
+  return { state: 'done', text: String(body.answer), sources: [...byId.values()].map(({ quotes, ...e }) => ({ ...e, quote: quotes.join(' … ') })) };
 }
 
 module.exports = { SearchIndex, askPrompt, readAnswer, termsOf };
