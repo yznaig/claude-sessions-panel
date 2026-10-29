@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.17.2 — 2026-10-28
+Hovering a session shows the name other sessions know it by (`hire-17`, `command-hq-e2`: Claude Code's registry name, used when sessions message each other), above its folder and id. A session that is no longer running shows the name it had ("Was hire-17"); one whose registry name is just its title shows nothing extra.
+
 ## 0.17.1 — 2026-10-28
 Session names get the room: every other column (repo, time chip, status, age) is now as wide as the widest thing in it, instead of a fixed width kept on every row, so names stop cutting off early in a narrow or zoomed panel.
 

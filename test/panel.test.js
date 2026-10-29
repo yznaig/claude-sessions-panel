@@ -909,3 +909,11 @@ withHarness('search: every word once beats one word everywhere', async h => {
   h.start();
   same((await h.search('crane heron'))[0], 'Birds');
 });
+
+withHarness('a row carries the name other sessions know it by, and keeps it once it stops', async h => {
+  const a = h.session('a', { regName: 'hire-17', transcript: [L.aiTitle('Overnight ticket prep')] });
+  h.start();
+  eq(h.row('a').name, 'Overnight ticket prep'); eq(h.row('a').handle, 'hire-17');
+  h.stop(); await a.end(); h.start();
+  eq(h.row('a').status, 'offline'); eq(h.row('a').handle, 'hire-17');
+});

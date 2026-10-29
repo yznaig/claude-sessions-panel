@@ -299,7 +299,8 @@ class SessionList {
 
   entryOf(r, now) {
     const since = r.statusUpdatedAt || r.updatedAt || r.startedAt || now;
-    return { id: r.sessionId, cwd: r.cwd || '', name: this.transcripts.displayName(r), since, startedAt: r.startedAt || since };
+    // handle: the registry's name for it (hire-17), which other sessions use to message it.
+    return { id: r.sessionId, cwd: r.cwd || '', name: this.transcripts.displayName(r), handle: r.name || '', since, startedAt: r.startedAt || since };
   }
   closedAt(id, cwd) { return this.transcripts.readTranscript({ sessionId: id, cwd }).closed; }
 
@@ -494,7 +495,7 @@ class SessionList {
     const attention = a && a.ready && !dismissed ? 'ready' : null;
     return {
       id: e.id, pid: null, name: this.transcripts.displayName({ sessionId: e.id, cwd: e.cwd, name: e.name }), cwd: e.cwd,
-      repo: path.basename(e.cwd) || '?', status: a ? 'asleep' : 'offline', attention, dismissed,
+      repo: path.basename(e.cwd) || '?', status: a ? 'asleep' : 'offline', attention, dismissed, handle: e.handle || '',
       waitingFor: '', since: e.since, startedAt: e.startedAt || e.since, closed: false, folder: this.folders.of(e.id),
       keep: kept.has(e.id), stopping: false, canStop: !!a,
       cost: attention ? this.transcripts.replyCost(this.transcripts.readTranscript({ sessionId: e.id, cwd: e.cwd }).reply) : null,
@@ -529,7 +530,7 @@ class SessionList {
       const t = this.transcripts.readTranscript(r);
       rows.push({
         id, pid: r.pid, name: this.transcripts.displayName(r), cwd: r.cwd || '',
-        repo: path.basename(r.cwd || '') || '?', status, attention, dismissed,
+        repo: path.basename(r.cwd || '') || '?', status, attention, dismissed, handle: r.name || '',
         waitingFor: r.waitingFor || '', since, startedAt: r.startedAt || since,
         closed: status === 'idle' && t.closed, folder: this.folders.of(id),
         cost: attention === 'ready' ? this.transcripts.replyCost(t.reply) : null,

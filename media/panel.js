@@ -105,7 +105,9 @@
     const offline = r.status === 'offline';
     const asleep = r.status === 'asleep';
     const d = el('div', 'row ' + (r.attention || '') + (r.closed ? ' closedRow' : '') + (offline ? ' offlineRow' : '') + (asleep || r.stopping ? ' asleepRow' : '') + (r.dismissed ? ' dismissedRow' : ''));
-    d.title = r.cwd + '\n' + r.id + (offline ? '\nNot running: click to reopen' : '') +
+    // The name other sessions know it by (hire-17), when it isn't just the title shown.
+    const known = r.handle && r.handle !== r.name ? (offline || asleep ? 'Was ' : '') + r.handle + '\n' : '';
+    d.title = known + r.cwd + '\n' + r.id + (offline ? '\nNot running: click to reopen' : '') +
       (asleep ? '\nAsleep: its process was stopped to free memory. Click to wake it; the conversation resumes.' : '');
     d.appendChild(el('span', 'dot ' + kind));
     d.appendChild(el('span', 'name', r.name));
