@@ -917,3 +917,43 @@ withHarness('a row carries the name other sessions know it by, and keeps it once
   h.stop(); await a.end(); h.start();
   eq(h.row('a').status, 'offline'); eq(h.row('a').handle, 'hire-17');
 });
+
+// ---- background sessions (claude --bg): handed over on a click -------------
+
+withHarness('a background session that is done: a click stops it there and opens it here', async h => {
+  const a = h.session('a', { bg: true, slowStop: true });
+  h.start();
+  await h.send({ type: 'focus', id: a.id });
+  same(JSON.parse(require('fs').readFileSync(require('path').join(h.home, 'stop-args.json'), 'utf8')), ['stop', 'job-a']);
+  assert.ok(!a.alive(), 'its background process is gone before the open');
+  eq(h.executed.at(-1)[0], 'claude-vscode.editor.open'); eq(h.executed.at(-1)[1], a.id);
+});
+
+withHarness('a background session still working or waiting is left alone; you can watch it in a terminal', async h => {
+  const b = h.session('b', { bg: true, status: 'busy' }); const w = h.session('w', { bg: true, status: 'waiting' });
+  h.start();
+  const before = h.executed.length;
+  h.pick = undefined; await h.send({ type: 'focus', id: b.id });
+  h.pick = 'Watch in terminal'; await h.send({ type: 'focus', id: w.id });
+  await h.pause();
+  assert.ok(b.alive()); assert.ok(w.alive());
+  eq(h.executed.length, before, 'not opened'); eq(h.told.length, 2);
+  eq(h.terminals.length, 1); same(h.terminals[0].sent, ['claude attach job-w']);
+});
+
+withHarness('a background session that will not stop is not opened twice', async h => {
+  h.bgStopWorks = false;
+  const a = h.session('a', { bg: true });
+  h.start();
+  const before = h.executed.length;
+  await h.send({ type: 'focus', id: a.id });
+  assert.ok(a.alive()); eq(h.executed.length, before); eq(h.told.length, 1);
+});
+
+withHarness('a session started in VS Code opens as before, with no stop', async h => {
+  const a = h.session('a');
+  h.start();
+  await h.send({ type: 'focus', id: a.id });
+  assert.ok(!require('fs').existsSync(require('path').join(h.home, 'stop-args.json')));
+  eq(h.executed.at(-1)[1], a.id);
+});

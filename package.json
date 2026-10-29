@@ -2,7 +2,7 @@
   "name": "claude-sessions-panel",
   "displayName": "Claude Sessions",
   "description": "A bottom-panel tab listing your live Claude Code sessions: running, response ready (green), needs an answer (blue). Click to focus the session. Plus a Usage view: the current usage windows of every Claude Code and Codex login on the machine.",
-  "version": "0.17.2",
+  "version": "0.17.3",
   "publisher": "yznaig",
   "license": "MIT",
   "author": "yznaig",
@@ -188,7 +188,7 @@
         "claudeSessions.askCommand": {
           "type": "string",
           "default": "",
-          "description": "The claude command Ask Claude runs. Empty finds it (~/.local/bin/claude, then PATH)."
+          "description": "The claude command the panel runs (Ask Claude, and bringing a background session into VS Code). Empty finds it (~/.local/bin/claude, then PATH)."
         },
         "claudeSessions.sound.enabled": {
           "type": "boolean",

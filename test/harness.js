@@ -38,6 +38,7 @@ const vscodeStub = {
     setStatusBarMessage() {},
     showInformationMessage: async (msg, ...rest) => { current.told.push(msg); return current.pick; },
     showTextDocument: async doc => { current.opened.push(doc); },
+    createTerminal: o => { const t = { ...o, sent: [], show() {}, sendText(x) { t.sent.push(x); } }; current.terminals.push(t); return t; },
     createQuickPick() { throw new Error('not in tests'); },
   },
   commands: {
@@ -133,6 +134,14 @@ class Harness {
     this.askExit = 0;
     fs.writeFileSync(this.config.askCommand, `#!/usr/bin/env node
 const fs = require('fs'); const dir = ${J(this.home)};
+if (process.argv[2] === 'stop') {
+  fs.writeFileSync(dir + '/stop-args.json', JSON.stringify(process.argv.slice(2)));
+  const jobs = JSON.parse(fs.readFileSync(dir + '/bg-jobs.json', 'utf8'));
+  const job = jobs[process.argv[3]];
+  if (!job || !job.works) { process.stdout.write('no such session'); process.exit(1); }
+  try { process.kill(job.pid, 'SIGTERM'); } catch {}
+  process.stdout.write('stopped ' + process.argv[3]); process.exit(0);
+}
 let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
   fs.writeFileSync(dir + '/ask-input.txt', input); fs.writeFileSync(dir + '/ask-args.json', JSON.stringify(process.argv.slice(2)));
   const reply = JSON.parse(fs.readFileSync(dir + '/ask-reply.json', 'utf8'));
@@ -148,6 +157,8 @@ let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
     this.told = [];
     this.opened = [];
     this.pick = undefined;
+    this.terminals = [];
+    this.bgStopWorks = true;
     this.confirm = 'Delete';
     this.sounds = [];
     this.executed = [];
@@ -168,14 +179,17 @@ let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
   // `background`: the session has a background command running (a shell child, as Claude Code starts
   // one). `entrypoint`, `pidDomain`, `procStart` override what the registry record says.
   // `ignoresStop`: the process ignores SIGTERM.
-  session(name, { status = 'idle', cwd = this.proj, regName, transcript, background, ignoresStop, entrypoint = 'claude-vscode', pidDomain, procStart: ps } = {}) {
+  // `bg`: started with `claude --bg` (kind "bg", a job id `claude stop` takes).
+  // `slowStop`: takes half a second to exit after SIGTERM, as a session closing its helpers does.
+  session(name, { status = 'idle', cwd = this.proj, regName, transcript, background, ignoresStop, slowStop, bg, entrypoint = 'claude-vscode', pidDomain, procStart: ps } = {}) {
     const id = this.id(name);
     if (transcript) this.transcript(name, transcript, cwd);
     const k = background
       ? realSpawn('sh', ['-c', 'sh -c "sleep 600; : .claude/shell-snapshots/snapshot-bash.sh" & wait'], { stdio: 'ignore', detached: true })
       : ignoresStop ? realSpawn('sh', ['-c', 'trap "" TERM; sleep 600 & wait; wait'], { stdio: 'ignore', detached: true })
+        : slowStop ? realSpawn('sh', ['-c', 'trap "sleep 0.5; exit 0" TERM; sleep 600 & wait'], { stdio: 'ignore', detached: true })
         : realSpawn('sleep', ['600'], { stdio: 'ignore' });
-    k.group = !!(background || ignoresStop);
+    k.group = !!(background || ignoresStop || slowStop);
     kids.add(k);
     this.kids.push(k);
     const exited = new Promise(res => k.once('exit', () => { kids.delete(k); res(); }));
@@ -183,7 +197,14 @@ let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
     const rec = {
       pid: k.pid, sessionId: id, cwd, name: regName !== undefined ? regName : name, status, startedAt: this.now, statusUpdatedAt: this.now,
       procStart: ps !== undefined ? ps : procStart(k.pid), entrypoint, kind: 'interactive', ...(pidDomain ? { pidDomain } : {}),
+      ...(bg ? { kind: 'bg', entrypoint: 'cli', jobId: 'job-' + name } : {}),
     };
+    if (bg) {
+      const jf = path.join(this.home, 'bg-jobs.json');
+      const jobs = fs.existsSync(jf) ? JSON.parse(fs.readFileSync(jf, 'utf8')) : {};
+      jobs['job-' + name] = { pid: k.pid, works: this.bgStopWorks };
+      fs.writeFileSync(jf, J(jobs));
+    }
     const write = () => fs.writeFileSync(file, J(rec));
     write();
     const h = this;

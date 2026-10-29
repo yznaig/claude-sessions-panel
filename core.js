@@ -256,6 +256,7 @@ class Provider {
       case 'focus': {
         this.back();
         list.act({ type: 'ack', id: m.id });
+        if (!(await this.handOver(m.id))) break;
         try { await openSession(m.id); }
         catch (e) { vscode.window.showWarningMessage(`Claude Sessions: could not focus session (${e.message}).`); }
         break;
@@ -331,6 +332,44 @@ class Provider {
       ? await runAsk(askPrompt(q, results, this.index)).then(out => (out.error ? { state: 'error', text: out.error, sources: [] } : readAnswer(out.text, results)))
       : { state: 'none', text: '', sources: [] };
     this.post({ type: 'answer', q, all, ...answer });
+  }
+
+  // A session started with `claude --bg` (a hive sub-session) is held by its background process, so
+  // VS Code would say it is "still open somewhere else". Done with its turn, it is stopped there with
+  // `claude stop` (the conversation is kept; a plain kill gets it restarted) and opens here. Still
+  // working or waiting on an answer, it is left alone. Returns whether to go on and open it.
+  async handOver(id) {
+    const reg = this.list.reg(id);
+    if (!reg || reg.kind !== 'bg') return true;
+    const job = reg.jobId || String(reg.sessionId).slice(0, 8);
+    const name = displayName(reg);
+    const status = reg.status || 'idle';
+    if (status !== 'idle') {
+      const pick = await vscode.window.showInformationMessage(
+        `"${name}" is ${status === 'busy' ? 'still working' : 'waiting for an answer'} in the background. Watch it in a terminal, or click it again once it's done.`,
+        'Watch in terminal');
+      if (pick === 'Watch in terminal') {
+        const t = vscode.window.createTerminal({ name, cwd: reg.cwd || undefined });
+        t.sendText(`claude attach ${job}`);
+        t.show();
+      }
+      return false;
+    }
+    vscode.window.setStatusBarMessage(`Claude Sessions: bringing "${name}" in from the background…`, 4000);
+    const stopped = await new Promise(resolve => {
+      try {
+        const child = require('child_process').execFile(claudeCommand(), ['stop', job], { cwd: reg.cwd || os.homedir(), timeout: 30e3 },
+          err => resolve(!err));
+        child.stdin.end();
+      } catch { resolve(false); }
+    });
+    for (let i = 0; stopped && i < 40 && pidAlive(reg); i++) await new Promise(r => setTimeout(r, 200));
+    if (!stopped || pidAlive(reg)) {
+      vscode.window.showInformationMessage(`Claude Sessions: couldn't stop "${name}" in the background, so it wasn't opened here (it would say it is open somewhere else). Try "claude stop ${job}" in a terminal.`);
+      return false;
+    }
+    this.look();
+    return true;
   }
 
   // The X: off the list and its process stopped. A session working or waiting on you asks first.

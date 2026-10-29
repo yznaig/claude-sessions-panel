@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.17.3 — 2026-10-29
+Clicking a session that runs in the background (started with `claude --bg`, as session-hive sub-sessions are) brings it into VS Code instead of hitting "This conversation is still open somewhere else". Done with its turn, it is stopped there with `claude stop` (the conversation is kept) and opens here a second later. Still working or waiting for an answer, it is left running, and the panel offers to watch it in a terminal (`claude attach`).
+
 ## 0.17.2 — 2026-10-28
 Hovering a session shows the name other sessions know it by (`hire-17`, `command-hq-e2`: Claude Code's registry name, used when sessions message each other), above its folder and id. A session that is no longer running shows the name it had ("Was hire-17"); one whose registry name is just its title shows nothing extra.
 
