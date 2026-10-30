@@ -1,5 +1,8 @@
 # Changelog
 
+## session-trail 0.6.0 (companion mod) — 2026-10-30
+**Since you last looked.** Each prompt you send now carries, for Claude only, a few lines on what the other sessions in this workspace did since your last prompt: decisions recorded, who holds which role, threads handed over, notes, messages between other sessions, refused edits, sub-sessions started. At most 8 lines, newest first, and nothing at all when nothing is new. Sessions record decisions (`hive.py decide`, with an id like `e1030-07` to cite), roles (`hive.py role`, looked up with `hive.py who`) and one-line notes (`hive.py note`), and the house rules now keep messages to questions, thread handoffs and `[keep going]`: FYIs and "about to edit" notices go to the log instead. A session told "the user decided X" with no recorded decision asks for it to be recorded instead of acting. `hive.py log` shows the new kinds. Off in headless runs, like the rest of the hive.
+
 ## 0.20.0 — 2026-10-30
 **Parked is its own mark.** Right-click a session (or its ⋯) and tick **Parked (other sessions don't message it)**; the row shows 🔕. The session-hive mod now reads this mark instead of folders, so filing a session in a folder is only grouping again: sessions in folders can be messaged and woken like any other. Until a window is reloaded onto this version, sessions in its folders count as not parked. Shared by every window and kept through restarts, sleep and Removed.
 
