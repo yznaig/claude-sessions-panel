@@ -15,6 +15,7 @@ const { spawn } = require('child_process');
 const SHOW_ALL_KEY = 'claudeSessions.showAllWindows';
 const STOP_AND_REMOVE = 'Stop and remove';
 const REMOVE_ONLY = 'Remove, keep it running';
+const PUT_TO_SLEEP = 'Put to sleep';
 // The tab each window shows: a folder's name, or '' for Main (the unfiled sessions).
 const VIEW_FOLDER_KEY = 'claudeSessions.viewFolder';
 
@@ -265,6 +266,7 @@ class Provider {
       case 'ack': case 'restore': case 'keep': list.act({ type: m.type, id: m.id }); break;
       case 'color': list.act({ type: 'color', id: m.id, color: m.color }); break;
       case 'dismiss': await this.remove(m.id); break;
+      case 'sleep': await this.sleep(m.id); break;
       case 'toggleAway': this.setAway(!readAway().away, 'moon'); break;
       case 'toggleAll': this.toggleAll(); return;
       case 'toggleDismissed': this.showDismissed = !this.showDismissed; break;
@@ -388,6 +390,22 @@ class Provider {
       stop = pick === STOP_AND_REMOVE;
     }
     this.list.act({ type: 'dismiss', id, stop });
+  }
+
+  // Put to sleep (right-click): stops the process to free its memory and leaves the row where it is,
+  // asleep, as auto-close does. Asks first if it is working or waiting for you.
+  async sleep(id) {
+    if (this.look) this.look();
+    const risk = this.list.stopRisk(id);
+    if (risk) {
+      const row = this.list.rows(true).find(r => r.id === id);
+      const pick = await vscode.window.showWarningMessage(
+        `"${row ? row.name : id}" is ${risk === 'working' ? 'still working' : 'waiting for your answer'}. Put it to sleep anyway?`,
+        { modal: true, detail: `Its process ends, which cuts off what it is ${risk === 'working' ? 'doing' : 'waiting for'}. It stays on the list; click it to wake it and the conversation carries on.` },
+        PUT_TO_SLEEP);
+      if (pick !== PUT_TO_SLEEP) return;
+    }
+    this.list.act({ type: 'sleep', id });
   }
 
   toggleAll() {

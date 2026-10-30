@@ -114,7 +114,12 @@
     const items = [{ heading: 'Move to' }, { label: 'Main', current: !r.folder, run: () => post({ type: 'move', id: r.id, folder: '' }) }];
     for (const f of state.folders) items.push({ label: f, current: r.folder === f, run: () => post({ type: 'move', id: r.id, folder: f }) });
     items.push({ label: '+ New folder…', run: () => post({ type: 'newFolder', id: r.id }) });
-    if (r.canStop) items.push('-', { label: 'Keep running (never auto-close)', checked: !!r.keep, run: () => post({ type: 'keep', id: r.id }) });
+    if (r.canStop) {
+      items.push('-');
+      // Running in VS Code: stop it to free its memory; it stays here, asleep, until you click it.
+      if (r.status !== 'asleep' && !r.stopping) items.push({ label: 'Put to sleep (frees memory, stays listed)', run: () => post({ type: 'sleep', id: r.id }) });
+      items.push({ label: 'Keep running (never auto-close)', checked: !!r.keep, run: () => post({ type: 'keep', id: r.id }) });
+    }
     items.push('-', { label: 'Dot color…', run: () => colorMenu(r, x, y) });
     items.push('-', { label: removeLabel(r), run: () => post({ type: 'dismiss', id: r.id }) });
     openMenu(x, y, items);

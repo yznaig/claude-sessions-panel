@@ -1017,3 +1017,29 @@ test('usage: a 429 reads as rate limited, not failed, for Claude and Codex login
     eq(r.state, 'error'); eq(r.error, 'Usage read failed (HTTP 500)');
   } finally { https.get = get; fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ---- put to sleep from the menu --------------------------------------------------
+
+withHarness('put to sleep: stops an idle session at once; it stays where it is, asleep, through a restart', async h => {
+  const a = h.session('a'); const b = h.session('b');
+  h.start();
+  h.answers.push('Later'); await h.send({ type: 'newFolder', id: b.id });
+  await h.send({ type: 'sleep', id: a.id }); await h.send({ type: 'sleep', id: b.id });
+  same(h.asked, []);
+  await a.gone(); await b.gone(); h.step();
+  eq(h.row('a').status, 'asleep'); eq(h.row('a').dismissed, false); eq(h.row('a').folder, '');
+  eq(h.row('b').status, 'asleep'); eq(h.row('b').folder, 'Later');
+  h.step(31e3); h.restart();
+  eq(h.row('a').status, 'asleep'); eq(h.row('a').dismissed, false); eq(h.row('b').folder, 'Later');
+});
+
+withHarness('put to sleep: a working or waiting session asks first; a terminal session is left running', async h => {
+  const b = h.session('b', { status: 'busy' }); const w = h.session('w', { status: 'waiting' }); const t = h.session('t', { entrypoint: 'cli' });
+  h.start();
+  h.confirm = undefined; await h.send({ type: 'sleep', id: b.id });
+  eq(h.asked.length, 1); await h.pause(); assert.ok(b.alive()); eq(h.row('b').status, 'busy');
+  h.confirm = 'Put to sleep'; await h.send({ type: 'sleep', id: w.id });
+  await w.gone(); h.step(); eq(h.row('w').status, 'asleep'); eq(h.row('w').dismissed, false);
+  await h.send({ type: 'sleep', id: t.id }); h.step(); await h.pause();
+  assert.ok(t.alive()); eq(h.row('t').status, 'idle');
+});

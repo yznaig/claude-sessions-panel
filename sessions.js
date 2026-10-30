@@ -479,6 +479,7 @@ class SessionList {
     switch (a.type) {
       case 'ack': this.attention.delete(a.id); this.asleep.clearReady(a.id); break;
       case 'keep': this.kept.toggle(a.id); break;
+      case 'sleep': this.stop(this.reg(a.id)); break;
       case 'color': this.colors.set(a.id, a.color); break;
       // The star: mark an idle running session green to come back to it, or clear that mark.
       case 'mark': {

@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.19.0 — 2026-10-29
+**Put to sleep.** Right-click a session (or its ⋯) and pick **Put to sleep** to stop its process now and free its memory, without waiting for auto-close. It stays where it is on the list, in its folder, dimmed as asleep; click it to wake it and the conversation carries on. A session that is working or waiting for you asks first. Only for sessions running in VS Code (a terminal session would not come back where it was).
+
 ## 0.18.3 — 2026-10-29
 A usage read the service refuses as rate limited (HTTP 429) no longer shows as a red error. The card says **Rate limited · last read 7m ago** and keeps its last reading, dimmed. This happens when something else reads the same login's usage often, such as an overnight runner. Press ↻ again later.
 
