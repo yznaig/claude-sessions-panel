@@ -449,11 +449,10 @@ class Hive(unittest.TestCase):
         self.assertIn('before the damage', self.since())
 
     def test_fold_lines_stay_one_short_line(self):
-        self.run_hive('role', '--workspace', '/work/repo', '--area', 'run\nner ' + 'x' * 300, '--role', 'build\ner',
+        self.run_hive('role', '--workspace', '/work/repo', '--area', 'run\nner ' + 'x' * 50, '--role', 'build\ner',
                       self_id='peer-0002')
         rec = self.log()[-1]
         self.assertNotIn('\n', rec['area'] + rec['role'])
-        self.assertLessEqual(len(rec['area']), 60)
         lines = [l for l in self.since().splitlines() if ' role ' in l]
         self.assertEqual(len(lines), 1)
         self.assertLessEqual(len(lines[0]), 200)
@@ -491,6 +490,43 @@ class Hive(unittest.TestCase):
         self.assertNotIn('only pass an idea along', out)
         self.assertIn('log --hours 168', out)
         self.assertIn('or under **Decisions**', out)
+        self.assertIn('another workspace only with a question, an answer or a handoff', out)
+
+
+    def test_a_refused_edit_reaches_the_holder_by_session_id_after_a_rename(self):
+        far = self.elsewhere()
+        self.claim('/shared/vault/note.md', who='far-0003')
+        self.register(far['pid'], 'far-0003', 'other-cc-renamed', '/elsewhere')   # same session, new name
+        self.claim('/shared/vault/note.md')
+        self.assertIn('/shared/vault/note.md', self.since(who='far-0003'))
+
+    def test_an_unknown_self_writes_no_event(self):
+        p = subprocess.run([sys.executable, '-I', HIVE, '--self', 'nobody-here', 'decide', '--workspace', '/w', '--area', 'a', 'x'],
+                           capture_output=True, text=True, env=dict(os.environ, HOME=self.home), timeout=30)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertFalse(os.path.exists(os.path.join(self.home, '.claude', 'session-hive', 'log.ndjson')))
+
+    def test_an_over_long_area_or_role_is_refused_not_cut(self):
+        out = self.run_hive('role', '--workspace', '/work/repo', '--area', 'a' * 61, '--role', 'builder', ok=False)
+        self.assertEqual(out, '')
+        self.assertFalse(os.path.exists(os.path.join(self.home, '.claude', 'session-hive', 'log.ndjson')))
+
+    def test_the_holder_is_after_the_last_arrow_and_no_arrow_logs_no_handoff(self):
+        self.run_hive('sent', '--to', 'work-cc', stdin='Thread moved: build -> deploy pipeline → work-bb', self_id='peer-0002')
+        self.run_hive('sent', '--to', 'work-cc', stdin='Thread moved: the runner design', self_id='peer-0002')
+        moved = [r for r in self.log() if r['dir'] == 'moved']
+        self.assertEqual([(r['thread'], r['holder']) for r in moved], [('build -> deploy pipeline', 'work-bb')])
+
+    def test_a_record_with_a_bad_time_does_not_silence_the_fold(self):
+        self.add_log({'at': None, 'dir': 'note', 'from': 'x', 'fromId': 'x', 'workspace': '/work/repo', 'text': 'bad'})
+        self.add_log({'at': 'soon', 'dir': 'note', 'from': 'x', 'fromId': 'x', 'workspace': '/work/repo', 'text': 'bad'})
+        self.run_hive('note', 'good news', self_id='peer-0002')
+        self.assertIn('good news', self.since('--take'))
+        self.assertIn('good news', self.run_hive('log'))
+
+    def test_a_windows_workspace_path_is_read_as_its_wsl_path(self):
+        self.run_hive('decide', '--workspace', 'C:\\HQ\\vault', '--area', 'qa', 'x')
+        self.assertEqual(self.log()[-1]['workspace'], '/mnt/c/HQ/vault')
 
 
 if __name__ == '__main__':

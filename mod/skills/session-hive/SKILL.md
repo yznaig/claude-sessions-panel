@@ -1,6 +1,6 @@
 ---
 name: session-hive
-description: See which other Claude Code sessions are live in this workspace and what each is on, read the log of messages and events between sessions, check messages that waited instead of waking a session, or record a decision, a role or a note for other sessions. Use before routing an idea or a finding to another session, when the user answers a numbered decision or says yes to a named proposal, when taking or looking up a role (who is the builder), before editing a shared doc another session may be in, when the user asks "who else is working on this", "which session has X", "what have the sessions been saying to each other", or when the startup session list is stale.
+description: See which other Claude Code sessions are live in this workspace and what each is on, read the log of messages and events between sessions, check messages that waited instead of waking a session, or record a decision, a role or a note for other sessions. Use before messaging another session, when the user answers a numbered decision or says yes to a named proposal, when taking or looking up a role (who is the builder), before editing a shared doc another session may be in, when the user asks "who else is working on this", "which session has X", "what have the sessions been saying to each other", or when the startup session list is stale.
 ---
 
 # Session hive
