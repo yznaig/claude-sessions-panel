@@ -120,7 +120,8 @@
       if (r.status !== 'asleep' && !r.stopping) items.push({ label: 'Put to sleep (frees memory, stays listed)', run: () => post({ type: 'sleep', id: r.id }) });
       items.push({ label: 'Keep running (never auto-close)', checked: !!r.keep, run: () => post({ type: 'keep', id: r.id }) });
     }
-    items.push('-', { label: 'Dot color…', run: () => colorMenu(r, x, y) });
+    items.push('-', { label: 'Parked (other sessions don\'t message it)', checked: !!r.parked, run: () => post({ type: 'park', id: r.id }) });
+    items.push({ label: 'Dot color…', run: () => colorMenu(r, x, y) });
     items.push('-', { label: removeLabel(r), run: () => post({ type: 'dismiss', id: r.id }) });
     openMenu(x, y, items);
   }
@@ -179,8 +180,9 @@
       d.appendChild(star);
     } else d.appendChild(el('span'));
     d.appendChild(costChip(r));
-    const st = el('span', 'state ' + (asleep && !r.attention ? 'asleep' : kind), (r.keep ? '📌 ' : '') + label(r));
-    if (r.keep) st.title = 'Keep running: never auto-closed (⋯ to change)';
+    const st = el('span', 'state ' + (asleep && !r.attention ? 'asleep' : kind), (r.parked ? '🔕 ' : '') + (r.keep ? '📌 ' : '') + label(r));
+    const marks = [r.parked && 'Parked: other sessions don\'t message it', r.keep && 'Keep running: never auto-closed'].filter(Boolean);
+    if (marks.length) st.title = marks.join('\n') + '\n(⋯ to change)';
     d.appendChild(st);
     d.appendChild(el('span', 'age', age(state.now - r.since)));
     if (r.dismissed) {

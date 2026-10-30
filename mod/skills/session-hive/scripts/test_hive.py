@@ -101,12 +101,19 @@ class Hive(unittest.TestCase):
         self.assertIn('80% used', v['reason'])
         self.assertEqual(self.receive('--usage', '74.5')['action'], 'deliver')
 
-    def test_a_parked_session_is_never_woken(self):
+    def snapshot(self, rows):
         snaps = os.path.join(self.home, '.claude', 'sessions-panel')
-        os.makedirs(snaps)
+        os.makedirs(snaps, exist_ok=True)
         with open(os.path.join(snaps, 'win1.json'), 'w') as f:
-            json.dump({'rows': [{'id': 'me-0001', 'folder': 'Later'}]}, f)
+            json.dump({'rows': rows}, f)
+
+    def test_a_parked_session_is_never_woken(self):
+        self.snapshot([{'id': 'me-0001', 'folder': 'Later', 'parked': True}])
         self.assertEqual(self.receive()['action'], 'hold')
+
+    def test_a_session_filed_in_a_folder_but_not_parked_is_woken(self):
+        self.snapshot([{'id': 'me-0001', 'folder': 'Workflow'}])
+        self.assertEqual(self.receive()['action'], 'deliver')
 
     def test_an_eleventh_message_in_an_hour_from_one_session_waits_even_when_busy(self):
         for _ in range(10):
@@ -137,11 +144,12 @@ class Hive(unittest.TestCase):
         self.assertNotIn('other-cc', out)
 
     def test_peers_marks_a_parked_session(self):
-        snaps = os.path.join(self.home, '.claude', 'sessions-panel')
-        os.makedirs(snaps)
-        with open(os.path.join(snaps, 'win1.json'), 'w') as f:
-            json.dump({'rows': [{'id': 'peer-0002', 'folder': 'Later'}]}, f)
+        self.snapshot([{'id': 'peer-0002', 'parked': True}])
         self.assertIn('parked: never message', self.run_hive('peers'))
+
+    def test_peers_does_not_call_a_filed_session_parked(self):
+        self.snapshot([{'id': 'peer-0002', 'folder': 'Workflow'}])
+        self.assertNotIn('parked: never message', self.run_hive('peers'))
 
     def test_peers_leaves_other_workspaces_out_but_counts_them(self):
         p = subprocess.Popen(['sleep', '30'])

@@ -26,7 +26,7 @@ The script is `scripts/hive.py` in this skill's folder; run it with `python3 -I`
 Reading the list:
 - **busy / idle** comes from Claude Code's own process registry, and the token count from the session's last response.
 - **last asked** is the user's latest request there, and **recent files** what it touched in the last two hours. Both come from its transcript, never from anything a session wrote about itself.
-- **parked** means the user filed it in a Claude Sessions panel folder: don't message it.
+- **parked** means the user marked it Parked in the Claude Sessions panel (right-click a row): don't message it. A panel folder is only grouping; a filed session can be messaged.
 - **long** means that session is past the wake limit: a message to it waits for the user instead of waking it, so send only what can wait.
 
 How messages are handled (the hooks in this plugin; nothing to do by hand):

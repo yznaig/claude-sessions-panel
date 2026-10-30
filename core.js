@@ -263,7 +263,7 @@ class Provider {
         break;
       }
       case 'mark': this.back(); list.act({ type: m.type, id: m.id }); break;
-      case 'ack': case 'restore': case 'keep': list.act({ type: m.type, id: m.id }); break;
+      case 'ack': case 'restore': case 'keep': case 'park': list.act({ type: m.type, id: m.id }); break;
       case 'color': list.act({ type: 'color', id: m.id, color: m.color }); break;
       case 'dismiss': await this.remove(m.id); break;
       case 'sleep': await this.sleep(m.id); break;
@@ -500,6 +500,7 @@ function writeSnapshot(rows, showAll) {
       id: r.id, name: r.name, cwd: r.cwd,
       state: r.attention || (r.closed ? 'closed' : r.status === 'offline' ? 'not running' : r.status),
       ...(r.folder ? { folder: r.folder } : {}),
+      ...(r.parked ? { parked: true } : {}),
     })),
   };
   const text = JSON.stringify(body);

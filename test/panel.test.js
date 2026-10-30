@@ -1043,3 +1043,22 @@ withHarness('put to sleep: a working or waiting session asks first; a terminal s
   await h.send({ type: 'sleep', id: t.id }); h.step(); await h.pause();
   assert.ok(t.alive()); eq(h.row('t').status, 'idle');
 });
+
+// ---- parked: other sessions don't message it ------------------------------------
+
+withHarness('parked: its own mark from the menu, not a folder; shared, kept through restarts, and written for the hive', async h => {
+  const a = h.session('a'); const f = h.session('f');
+  h.start();
+  h.answers.push('Workflow'); await h.send({ type: 'newFolder', id: f.id });
+  eq(h.row('a').parked, false); eq(h.row('f').parked, false, 'a folder is only grouping');
+  let by = Object.fromEntries(h.snapshot().rows.map(r => [r.id.slice(h.prefix.length), r]));
+  eq(by.f.folder, 'Workflow'); eq(by.f.parked, undefined);
+  await h.send({ type: 'park', id: a.id });
+  eq(h.row('a').parked, true);
+  by = Object.fromEntries(h.snapshot().rows.map(r => [r.id.slice(h.prefix.length), r]));
+  eq(by.a.parked, true);
+  h.restart(); eq(h.row('a').parked, true);
+  await h.send({ type: 'dismiss', id: a.id }); await a.gone(); h.step();
+  eq(h.row('a').parked, true, 'still parked asleep and in Removed');
+  await h.send({ type: 'park', id: a.id }); eq(h.row('a').parked, false);
+});

@@ -113,7 +113,8 @@ def find_self(reg, given=None):
 
 
 def parked_ids():
-    """Sessions filed in a Claude Sessions panel folder: parked for later, never woken."""
+    """Sessions marked Parked in the Claude Sessions panel (right-click a row): never woken.
+    A panel folder is only grouping."""
     out = set()
     for f in glob.glob(os.path.join(SNAPSHOTS, '*.json')):
         try:
@@ -122,7 +123,7 @@ def parked_ids():
         except (OSError, ValueError):
             continue
         for row in sn.get('rows') or []:
-            if isinstance(row, dict) and row.get('folder'):
+            if isinstance(row, dict) and row.get('parked'):
                 out.add(row.get('id'))
     return out
 

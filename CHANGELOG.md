@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.20.0 — 2026-10-30
+**Parked is its own mark.** Right-click a session (or its ⋯) and tick **Parked (other sessions don't message it)**; the row shows 🔕. The session-hive mod now reads this mark instead of folders, so filing a session in a folder is only grouping again: sessions in folders can be messaged and woken like any other. Until a window is reloaded onto this version, sessions in its folders count as not parked. Shared by every window and kept through restarts, sleep and Removed.
+
 ## 0.19.0 — 2026-10-29
 **Put to sleep.** Right-click a session (or its ⋯) and pick **Put to sleep** to stop its process now and free its memory, without waiting for auto-close. It stays where it is on the list, in its folder, dimmed as asleep; click it to wake it and the conversation carries on. A session that is working or waiting for you asks first. Only for sessions running in VS Code (a terminal session would not come back where it was).
 
