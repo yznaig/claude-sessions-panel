@@ -107,6 +107,18 @@ test('a failed waiting-notes read does not lose the fold', async ($, on) => {
   expect(w.submitted[0]!.context).toEqual([FOLD])
 })
 
+test('a failed fold read does not lose the waiting notes', async ($, on) => {
+  const w = world(on, argv => (sub(argv) === 'since' ? { exitCode: 1 } : { stdout: 'notes' }))
+  await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'composer' } } as any)
+  expect(w.submitted[0]!.context).toEqual(['notes'])
+})
+
+test('a slash command collects neither the waiting notes nor the fold', async ($, on) => {
+  const w = world(on, () => ({ stdout: 'x' }))
+  await $.prompt.submit({ text: '/compact', wait: false, origin: { kind: 'composer' }, command: { name: 'compact' } } as any)
+  expect(w.calls).toEqual([])
+})
+
 test('a prompt from another session does not collect the waiting notes', async ($, on) => {
   const w = world(on, () => ({ stdout: 'notes' }))
   await $.prompt.submit({ text: 'hi', wait: false, origin: { kind: 'peer' } } as any)

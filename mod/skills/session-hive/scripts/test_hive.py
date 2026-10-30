@@ -192,7 +192,7 @@ class Hive(unittest.TestCase):
         self.assertEqual(self.claim('/work/repo/docs/asks.md', who='peer-0002')['action'], 'allow', 'the retry')
         # The retrying session now holds it, so the first one is the one asked next time.
         self.assertEqual(self.claim('/work/repo/docs/asks.md')['action'], 'refuse')
-        self.assertIn('was asked to message work-aa before editing /work/repo/docs/asks.md', self.run_hive('log'))
+        self.assertIn('work-bb was refused once editing /work/repo/docs/asks.md (held by work-aa)', self.run_hive('log'))
 
     def test_other_files_and_scratch_files_are_not_held(self):
         self.claim('/work/repo/a.md')
@@ -430,6 +430,67 @@ class Hive(unittest.TestCase):
         self.assertIn('Messages are for', out)
         self.assertIn('`decide --workspace', out)
         self.assertIn('no matching `decided` event', out)
+
+
+    def test_an_event_appended_late_with_an_older_stamp_is_not_lost(self):
+        self.since('--take')
+        # Stamped an hour ago but written after this session last looked (a writer that paused).
+        self.add_log({'at': time.time() - 3600, 'dir': 'note', 'from': 'work-bb', 'fromId': 'peer-0002',
+                      'workspace': '/work/repo', 'text': 'late but real'})
+        self.assertIn('late but real', self.since('--take'))
+        self.assertEqual(self.since('--take'), '')
+
+    def test_a_damaged_log_line_is_skipped_not_the_whole_log(self):
+        day = time.strftime('%m%d')
+        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', 'before the damage', self_id='peer-0002')
+        with open(os.path.join(self.home, '.claude', 'session-hive', 'log.ndjson'), 'a') as f:
+            f.write('{"at": 1, "dir": "out", "fro\n')
+        self.assertEqual(self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', 'after').strip(), f'e{day}-02')
+        self.assertIn('before the damage', self.since())
+
+    def test_fold_lines_stay_one_short_line(self):
+        self.run_hive('role', '--workspace', '/work/repo', '--area', 'run\nner ' + 'x' * 300, '--role', 'build\ner',
+                      self_id='peer-0002')
+        rec = self.log()[-1]
+        self.assertNotIn('\n', rec['area'] + rec['role'])
+        self.assertLessEqual(len(rec['area']), 60)
+        lines = [l for l in self.since().splitlines() if ' role ' in l]
+        self.assertEqual(len(lines), 1)
+        self.assertLessEqual(len(lines[0]), 200)
+
+    def test_a_sub_sessions_debrief_is_an_allowed_message(self):
+        self.assertIn('a sub-session\'s debrief to its parent', self.run_hive('peers'))
+
+
+    def test_a_refused_edit_reaches_a_holder_in_another_workspace(self):
+        far = self.elsewhere()
+        self.claim('/shared/vault/note.md', who='far-0003')
+        self.claim('/shared/vault/note.md')
+        self.assertRegex(self.since(who=far['sessionId']), r'edit work-aa is about to edit /shared/vault/note.md \(held by other-cc\)')
+
+    def test_a_handoff_with_a_long_thread_or_an_ascii_arrow_names_the_holder(self):
+        self.run_hive('sent', '--to', 'work-cc', stdin='Thread moved: ' + 'y' * 200 + ' -> work-bb', self_id='peer-0002')
+        rec = [r for r in self.log() if r['dir'] == 'moved'][-1]
+        self.assertEqual(rec['holder'], 'work-bb')
+        self.assertTrue(rec['thread'].startswith('yyy'))
+
+    def test_a_handoff_sent_to_this_session_is_not_folded_again(self):
+        self.run_hive('sent', '--to', 'work-aa', stdin='Thread moved: release notes → work-bb', self_id='peer-0002')
+        self.assertEqual(self.since(), '')
+
+    def test_events_are_not_written_by_an_unknown_session(self):
+        home = tempfile.mkdtemp()   # no registered sessions, so the process-tree walk finds none
+        p = subprocess.run([sys.executable, '-I', HIVE, 'note', 'who wrote this'], capture_output=True, text=True,
+                           env=dict(os.environ, HOME=home), timeout=30)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn('--self', p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(home, '.claude', 'session-hive', 'log.ndjson')))
+
+    def test_the_rules_have_no_message_for_ideas_and_say_how_to_check_a_decision(self):
+        out = self.run_hive('peers')
+        self.assertNotIn('only pass an idea along', out)
+        self.assertIn('log --hours 168', out)
+        self.assertIn('or under **Decisions**', out)
 
 
 if __name__ == '__main__':
