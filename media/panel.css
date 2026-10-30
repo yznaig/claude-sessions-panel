@@ -116,3 +116,4 @@ h4 { margin: 10px 0 4px; font-weight: 600; color: var(--vscode-descriptionForegr
 .menu .swatch { width: 18px; height: 18px; border-radius: 50%; border: none; padding: 0; cursor: pointer; }
 .menu .swatch:hover { transform: scale(1.15); }
 .menu .swatch.on { outline: 2px solid var(--vscode-focusBorder, #0078d4); outline-offset: 2px; }
+.dot.tinted.edge, .menu .swatch.edge { box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-foreground, #ccc) 35%, transparent); }

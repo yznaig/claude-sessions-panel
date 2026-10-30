@@ -50,6 +50,7 @@
         for (const [name, color] of it.swatches) {
           const s = el('button', 'swatch' + (color === it.current ? ' on' : ''));
           s.style.background = color;
+          if (edgy(color)) s.classList.add('edge');
           s.title = name;
           s.addEventListener('click', ev => { ev.stopPropagation(); closeMenu(); it.pick(color); });
           grid.appendChild(s);
@@ -74,6 +75,7 @@
 
   // ---- dot colors: right-click a session's dot to give it a color of your own ----
   // The whole color wheel, 12 hues, each light, medium and deep: one row per shade in the menu.
+  // Then white to black.
   const PALETTE = [
     ['Light red', '#f4afaf'], ['Light orange', '#f4cfaf'], ['Light yellow', '#f4e8af'], ['Light lime', '#ddf4af'], ['Light green', '#aff4b4'], ['Light mint', '#aff4d7'],
     ['Light teal', '#aff4f1'], ['Light sky', '#afddf4'], ['Light blue', '#afc6f4'], ['Light indigo', '#b4aff4'], ['Light purple', '#d7aff4'], ['Light pink', '#f4afd7'],
@@ -81,6 +83,8 @@
     ['Teal', '#7be0dd'], ['Sky', '#7bbee0'], ['Blue', '#7b9de0'], ['Indigo', '#837be0'], ['Purple', '#b67be0'], ['Pink', '#e07bb6'],
     ['Deep red', '#ce4646'], ['Deep orange', '#ce8546'], ['Deep yellow', '#ceb746'], ['Deep lime', '#a0ce46'], ['Deep green', '#46ce51'], ['Deep mint', '#46ce95'],
     ['Deep teal', '#46cec9'], ['Deep sky', '#46a0ce'], ['Deep blue', '#4673ce'], ['Deep indigo', '#5146ce'], ['Deep purple', '#9546ce'], ['Deep pink', '#ce4695'],
+    ['White', '#ffffff'], ['Gray 1', '#e8e8e8'], ['Gray 2', '#d1d1d1'], ['Gray 3', '#b9b9b9'], ['Gray 4', '#a2a2a2'], ['Gray 5', '#8b8b8b'],
+    ['Gray 6', '#747474'], ['Gray 7', '#5d5d5d'], ['Gray 8', '#464646'], ['Gray 9', '#2e2e2e'], ['Gray 10', '#171717'], ['Black', '#000000'],
   ];
   function colorMenu(r, x, y) {
     openMenu(x, y, [
@@ -90,10 +94,16 @@
       { label: 'No color', current: !r.color, run: () => post({ type: 'color', id: r.id, color: null }) },
     ]);
   }
+  // Very dark or very light colors get a faint ring, so they don't vanish into the background.
+  function edgy(color) {
+    const v = [1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16));
+    const lum = (0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]) / 255;
+    return lum < 0.3 || lum > 0.92;
+  }
   // The dot, in its own color when it has one; it keeps its shape for the state (spinning, ring).
   function dot(cls, color) {
     const d = el('span', 'dot ' + cls);
-    if (color) { d.classList.add('tinted'); d.style.setProperty('--c', color); }
+    if (color) { d.classList.add('tinted'); d.style.setProperty('--c', color); if (edgy(color)) d.classList.add('edge'); }
     return d;
   }
 

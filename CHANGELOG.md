@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.18.2 — 2026-10-29
+Twelve more dot colors: a row of grays from white to black, 48 in all. Very dark and very light ones get a faint ring so they don't disappear into the panel's background.
+
 ## 0.18.1 — 2026-10-29
 A fuller range of dot colors: the whole color wheel, 12 hues (red through pink) each in a light, medium and deep shade, 36 in all. Colors already chosen stay as they are.
 
