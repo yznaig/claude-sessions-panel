@@ -78,6 +78,35 @@ test('the user\'s next prompt carries the notes that waited', async ($, on) => {
   expect(w.submitted[0]).toMatchObject({ text: 'morning', context: ['[session hive] 1 message(s) waited'] })
 })
 
+const FOLD = '[session hive] Since you last looked: …\n10-30 11:14 decided [e1030-07] runner: no fourth account (work-10)'
+
+test('a user prompt carries "Since you last looked" when other sessions did something', async ($, on) => {
+  const w = world(on, argv => ({ stdout: sub(argv) === 'since' ? FOLD : '' }))
+  await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'composer' } } as any)
+  const since = w.calls.find(c => sub(c.argv) === 'since')!
+  expect(since.argv.join(' ')).toContain('since --take --cwd /work/repo')
+  expect(w.submitted[0]).toMatchObject({ text: 'next', context: [FOLD] })
+})
+
+test('the waiting notes come before the fold, each its own block', async ($, on) => {
+  const w = world(on, argv => ({ stdout: sub(argv) === 'since' ? FOLD : sub(argv) === 'held' ? 'notes' : '' }))
+  await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'composer' } } as any)
+  expect(w.submitted[0]!.context).toEqual(['notes', FOLD])
+})
+
+test('with nothing new and nothing waiting, the prompt goes as typed', async ($, on) => {
+  const w = world(on, () => ({ stdout: '\n' }))
+  await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'composer' } } as any)
+  expect(w.calls.map(c => sub(c.argv)).sort()).toEqual(['held', 'since'])
+  expect(w.submitted[0]!.context).toBeUndefined()
+})
+
+test('a failed waiting-notes read does not lose the fold', async ($, on) => {
+  const w = world(on, argv => (sub(argv) === 'held' ? { exitCode: 1 } : { stdout: FOLD }))
+  await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'composer' } } as any)
+  expect(w.submitted[0]!.context).toEqual([FOLD])
+})
+
 test('a prompt from another session does not collect the waiting notes', async ($, on) => {
   const w = world(on, () => ({ stdout: 'notes' }))
   await $.prompt.submit({ text: 'hi', wait: false, origin: { kind: 'peer' } } as any)
@@ -139,6 +168,9 @@ test('a headless run (an overnight runner worker) gets no hive at all', async ($
   expect(w.received).toEqual([ENVELOPE])
   await $.tool.call({ tool: 'Edit', file_path: '/work/repo/a.md', old_string: 'a', new_string: 'b' })
   expect(w.edits).toEqual(['Edit'])
+  await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'composer' } } as any)
+  expect(w.submitted[0]!.context).toBeUndefined()
+  await $.session.send({ to: 'api-b8', text: 'Thread moved: x → y', origin: { kind: 'model' } })
   expect(w.calls).toEqual([])
 })
 

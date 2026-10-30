@@ -121,15 +121,27 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
+  // Each user prompt carries the notes that waited for this session, then
+  // "Since you last looked": what other sessions in this workspace did since
+  // the last prompt (decisions, roles, handoffs, notes, messages, claims). The
+  // fold rides here and not in prompt.context, which the engine computes once
+  // per conversation. Nothing new adds nothing.
   on('prompt.submit', async ($, e, next) => {
     if (headless || e.command || !isUser(e.origin)) return next(e)
-    try {
-      const notes = (await hive($, ['held', '--take'])).trim()
-      if (notes) return next({ ...e, context: [...(e.context ?? []), notes] })
-    } catch (err) {
-      $.ui.log(`session hive: waiting notes not read (${err})`, { to: 'debug' })
+    const read = async (args: string[], what: string): Promise<string> => {
+      try {
+        return (await hive($, args)).trim()
+      } catch (err) {
+        $.ui.log(`session hive: ${what} not read (${err})`, { to: 'debug' })
+        return ''
+      }
     }
-    return next(e)
+    const cwd = await $.session.cwd()
+    const blocks = (await Promise.all([
+      read(['held', '--take'], 'waiting notes'),
+      read(['since', '--take', '--cwd', cwd], 'since you last looked'),
+    ])).filter(Boolean)
+    return next(blocks.length ? { ...e, context: [...(e.context ?? []), ...blocks] } : e)
   }).catch(($, e, next) => next(e))
 
   on('session.send', async ($, e, next) => {
