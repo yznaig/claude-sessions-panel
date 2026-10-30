@@ -991,3 +991,29 @@ withHarness('color: every window sees it, search results carry it, and anything 
   await h.send({ type: 'color', id: a.id, color: '#A1EDC7' });
   eq(h.row('a').color, '#a1edc7', 'saved the way the palette writes it, so the menu ticks it');
 });
+
+// ---- usage view ---------------------------------------------------------------
+
+test('usage: a 429 reads as rate limited, not failed, for Claude and Codex logins', async () => {
+  const fs = require('fs'), os = require('os'), path = require('path'), https = require('https');
+  const { EventEmitter } = require('events');
+  const usage = require('../usage');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-'));
+  fs.writeFileSync(path.join(dir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 't', expiresAt: Date.now() + H } }));
+  fs.writeFileSync(path.join(dir, 'auth.json'), JSON.stringify({ tokens: { access_token: 't' } }));
+  const get = https.get;
+  let status = 429;
+  https.get = (url, opts, cb) => {
+    const res = new EventEmitter(); res.statusCode = status; res.setEncoding = () => {};
+    const req = new EventEmitter();
+    setImmediate(() => { cb(res); res.emit('data', '{"error":{"type":"rate_limit_error"}}'); res.emit('end'); });
+    return req;
+  };
+  try {
+    eq((await usage.readOne({ kind: 'claude', dir, isDefault: false })).state, 'throttled');
+    eq((await usage.readOne({ kind: 'codex', dir, isDefault: false })).state, 'throttled');
+    status = 500;
+    const r = await usage.readOne({ kind: 'claude', dir, isDefault: false });
+    eq(r.state, 'error'); eq(r.error, 'Usage read failed (HTTP 500)');
+  } finally { https.get = get; fs.rmSync(dir, { recursive: true, force: true }); }
+});

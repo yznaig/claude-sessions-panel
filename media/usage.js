@@ -56,6 +56,10 @@
       box.append(row);
     } else if (c.state === 'error') {
       box.append(el('div', 'note err', c.error + (c.readAt ? ` · last read ${readText(c.readAt, s.now)}` : '')));
+    } else if (c.state === 'throttled') {
+      const n = el('div', 'note', c.readAt ? `Rate limited · last read ${readText(c.readAt, s.now)}` : 'Rate limited · no reading yet, try ↻ in a few minutes');
+      n.title = 'The usage service is refusing reads for this login for now, usually because something else reads it often. Try ↻ later.';
+      box.append(n);
     }
 
     for (const w of c.windows || []) {

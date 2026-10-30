@@ -13,6 +13,10 @@
 // Code renews the token only while it runs on that login, so Wake runs one tiny print-mode prompt
 // on it (a sliver of that account's usage) and reads again. The panel never renews tokens itself:
 // a renewal racing a running session's can sign that session out.
+//
+// A read refused with HTTP 429 is shown as rate limited, not failed: the endpoint limits reads per
+// login, and something else polling the same login (an overnight runner, say) uses that allowance
+// up. The card keeps its last reading and says how old it is.
 'use strict';
 const vscode = require('vscode');
 const fs = require('fs');
@@ -137,6 +141,7 @@ async function readClaude(acct) {
   if (o.expiresAt && o.expiresAt < Date.now()) return { ...base, state: 'asleep' };
   const r = await getJson(CLAUDE_URL, { Authorization: `Bearer ${o.accessToken}`, 'anthropic-beta': 'oauth-2025-04-20', 'User-Agent': 'claude-sessions-panel' });
   if (r.status === 401) return { ...base, state: 'asleep' };
+  if (r.status === 429) return { ...base, state: 'throttled' };
   if (r.status !== 200 || !r.body) return { ...base, state: 'error', error: `Usage read failed (HTTP ${r.status})` };
   return { ...base, state: 'ok', windows: claudeWindows(r.body) };
 }
@@ -149,6 +154,7 @@ async function readCodex(acct) {
   if (t.account_id) headers['ChatGPT-Account-Id'] = t.account_id;
   const r = await getJson(CODEX_URL, headers);
   if (r.status === 401) return { state: 'error', error: 'Sign-in expired: run Codex once on this login' };
+  if (r.status === 429) return { state: 'throttled' };
   if (r.status !== 200 || !r.body) return { state: 'error', error: `Usage read failed (HTTP ${r.status})` };
   const b = r.body;
   return {

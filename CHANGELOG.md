@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.18.3 — 2026-10-29
+A usage read the service refuses as rate limited (HTTP 429) no longer shows as a red error. The card says **Rate limited · last read 7m ago** and keeps its last reading, dimmed. This happens when something else reads the same login's usage often, such as an overnight runner. Press ↻ again later.
+
 ## 0.18.2 — 2026-10-29
 Twelve more dot colors: a row of grays from white to black, 48 in all. Very dark and very light ones get a faint ring so they don't disappear into the panel's background.
 
