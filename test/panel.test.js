@@ -311,8 +311,8 @@ withHarness('folders: create from a row, names checked, tab chosen per window', 
   h.answers.push('main'); await h.send({ type: 'newFolder' });
   h.answers.push('later'); await h.send({ type: 'newFolder' });
   same(h.state.folders, ['Later']); eq(h.refused.length, 2);
-  h.answers.push('HIRE'); await h.send({ type: 'newFolder' });
-  same(h.state.folders, ['Later', 'HIRE']); eq(h.state.viewFolder, 'HIRE');
+  h.answers.push('Work'); await h.send({ type: 'newFolder' });
+  same(h.state.folders, ['Later', 'Work']); eq(h.state.viewFolder, 'Work');
   await h.send({ type: 'showFolder', folder: 'Later' }); h.restart();
   eq(h.state.viewFolder, 'Later');
 });
@@ -817,10 +817,10 @@ withHarness('ask: two quotes from one session show it once', async h => {
 
 withHarness('search: a session run through slash commands is found by what you asked', async h => {
   h.transcript('slash', [L.customTitle('New pass'),
-    L.said('<command-message>pass is running…</command-message>\n<command-name>/pass</command-name>\n<command-args>just got another message from Will about the gantry</command-args>', { cwd: h.proj }),
+    L.said('<command-message>pass is running…</command-message>\n<command-name>/pass</command-name>\n<command-args>just got another message about the lighthouse</command-args>', { cwd: h.proj }),
     L.replied('On it.', { cwd: h.proj })]);
   h.start();
-  same(await h.search('gantry'), ['New pass']);
+  same(await h.search('lighthouse'), ['New pass']);
   eq(h.results.results[0].where, 'you');
 });
 
@@ -911,11 +911,11 @@ withHarness('search: every word once beats one word everywhere', async h => {
 });
 
 withHarness('a row carries the name other sessions know it by, and keeps it once it stops', async h => {
-  const a = h.session('a', { regName: 'hire-17', transcript: [L.aiTitle('Overnight ticket prep')] });
+  const a = h.session('a', { regName: 'proj-17', transcript: [L.aiTitle('Overnight ticket prep')] });
   h.start();
-  eq(h.row('a').name, 'Overnight ticket prep'); eq(h.row('a').handle, 'hire-17');
+  eq(h.row('a').name, 'Overnight ticket prep'); eq(h.row('a').handle, 'proj-17');
   h.stop(); await a.end(); h.start();
-  eq(h.row('a').status, 'offline'); eq(h.row('a').handle, 'hire-17');
+  eq(h.row('a').status, 'offline'); eq(h.row('a').handle, 'proj-17');
 });
 
 // ---- background sessions (claude --bg): handed over on a click -------------

@@ -1,3 +1,5 @@
 node_modules/
 *.vsix
 mod/.claude-plugin/types/
+__pycache__/
+*.pyc

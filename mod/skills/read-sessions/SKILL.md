@@ -16,7 +16,7 @@ Take the scope from their words:
 | They say | Scope | Command |
 |---|---|---|
 | "in my panel", "my panel sessions", "the sessions I have open" | the rows on the Main tab of this window's Claude Sessions panel; sessions parked in its folders are left out | `panel` |
-| a panel folder by name ("my Later folder", "the HIRE folder"), or "including the parked ones" | only that folder's sessions, or Main plus every folder | `panel --folder "<name>"` or `panel --all-folders` |
+| a panel folder by name ("my Later folder", "the Work folder"), or "including the parked ones" | only that folder's sessions, or Main plus every folder | `panel --folder "<name>"` or `panel --all-folders` |
 | "recent", "lately", or a topic with no time word | last 7 days ("today", "this week" set `--days`) | `recent --topic "..."` |
 | "all", "every session that", "ever", "dig through everything" | every session on the machine | `all --topic "..." --files ...` |
 | a session's name or something it produced | find that one | `all --topic "<name or the words they recall>"` |

@@ -8,7 +8,7 @@ const os = require('os');
 
 // ---- transcripts: titles and "good to close" -------------------------------
 //
-// Titles. The registry keeps a placeholder name ("command-hq-89") for a session
+// Titles. The registry keeps a placeholder name ("myapp-89") for a session
 // Claude names on its own; the real title is written into the session's
 // transcript. Same rule as the Claude extension's session list: the latest title
 // you set (custom-title) wins, else the latest generated one (ai-title).

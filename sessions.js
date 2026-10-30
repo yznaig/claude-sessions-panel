@@ -320,7 +320,7 @@ class SessionList {
 
   entryOf(r, now) {
     const since = r.statusUpdatedAt || r.updatedAt || r.startedAt || now;
-    // handle: the registry's name for it (hire-17), which other sessions use to message it.
+    // handle: the registry's name for it (myapp-17), which other sessions use to message it.
     return { id: r.sessionId, cwd: r.cwd || '', name: this.transcripts.displayName(r), handle: r.name || '', since, startedAt: r.startedAt || since };
   }
   closedAt(id, cwd) { return this.transcripts.readTranscript({ sessionId: id, cwd }).closed; }
