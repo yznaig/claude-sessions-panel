@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.18.0 — 2026-10-29
+**Dot colors.** Right-click a session's dot (or pick **Dot color…** in its ⋯ menu) to give it one of 16 pastels, mostly greens, teals and blues, so you can tell sessions apart at a glance; **No color** takes it off. The color replaces the dot's gray, green and blue, but the dot keeps its shape for the state: it still spins while running, glows when ready or waiting, and is a ring when asleep or not running. The row's green or blue background still shows ready and needs-you. Colors are shared by every window and stay through sleep, Removed and restarts; search results show them too.
+
 ## 0.17.3 — 2026-10-29
 Clicking a session that runs in the background (started with `claude --bg`, as session-hive sub-sessions are) brings it into VS Code instead of hitting "This conversation is still open somewhere else". Done with its turn, it is stopped there with `claude stop` (the conversation is kept) and opens here a second later. Still working or waiting for an answer, it is left running, and the panel offers to watch it in a terminal (`claude attach`).
 

@@ -957,3 +957,37 @@ withHarness('a session started in VS Code opens as before, with no stop', async 
   assert.ok(!require('fs').existsSync(require('path').join(h.home, 'stop-args.json')));
   eq(h.executed.at(-1)[1], a.id);
 });
+
+// ---- dot colors ----------------------------------------------------------------
+
+withHarness('color: a dot colored by right-click stays through reload, restart, sleep and Removed; No color clears it', async h => {
+  const a = h.session('a'); const b = h.session('b');
+  h.start();
+  eq(h.row('a').color, null);
+  await h.send({ type: 'color', id: a.id, color: '#a8e6cf' });
+  eq(h.row('a').color, '#a8e6cf'); eq(h.row('b').color, null);
+  h.reload(); eq(h.row('a').color, '#a8e6cf');
+  await h.send({ type: 'dismiss', id: a.id }); await a.gone(); h.step();
+  eq(h.row('a').status, 'asleep'); eq(h.row('a').dismissed, true); eq(h.row('a').color, '#a8e6cf');
+  await h.send({ type: 'restore', id: a.id }); eq(h.row('a').color, '#a8e6cf');
+  h.step(31e3); h.restart(); eq(h.row('a').color, '#a8e6cf');
+  await h.send({ type: 'color', id: a.id, color: null });
+  eq(h.row('a').color, null);
+});
+
+withHarness('color: every window sees it, search results carry it, and anything not a color is refused', async h => {
+  past(h, 'p', { title: 'Painted moon', you: ['hello'] });
+  const a = h.session('a');
+  h.start();
+  h.globalState.update('claudeSessions.colors', [[a.id, '#b5d6a7'], [h.id('p'), '#c7b8f5']]);
+  await h.send({ type: 'toggleDismissed' }); // another window's change, seen in the next update
+  eq(h.row('a').color, '#b5d6a7');
+  await h.search('painted');
+  eq(h.results.results[0].color, '#c7b8f5');
+  for (const bad of ['red', 'url(x)', '#12345', '#a8e6cf; background:red', 42, {}]) {
+    await h.send({ type: 'color', id: a.id, color: bad });
+    eq(h.row('a').color, '#b5d6a7', 'refused: ' + JSON.stringify(bad));
+  }
+  await h.send({ type: 'color', id: a.id, color: '#A1EDC7' });
+  eq(h.row('a').color, '#a1edc7', 'saved the way the palette writes it, so the menu ticks it');
+});

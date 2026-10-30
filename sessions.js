@@ -27,6 +27,7 @@ const KEYS = {
   folders: 'claudeSessions.folders',
   asleep: 'claudeSessions.asleep',
   kept: 'claudeSessions.keepRunning',
+  colors: 'claudeSessions.colors',
 };
 // A session of this window's folder that stops while VS Code keeps running was ended on purpose and
 // leaves the saved list after this long; when VS Code itself closes, the panel is gone well before.
@@ -254,6 +255,25 @@ class Kept {
   }
 }
 
+// ---- Colors: a dot color you chose per session, to tell sessions apart at a glance -------------
+// Saved as [id, '#rrggbb'], shared by every window and kept through sleep, Removed and restarts.
+// The palette lives in the webview; only a plain hex color is accepted here.
+const COLOR = /^#[0-9a-f]{6}$/i;
+class Colors {
+  constructor(store) { this.store = store; }
+  map() {
+    const s = this.store.get(KEYS.colors, []);
+    return new Map((Array.isArray(s) ? s : []).filter(x => Array.isArray(x) && COLOR.test(x[1])));
+  }
+  set(id, color) {
+    if (color !== null && !(typeof color === 'string' && COLOR.test(color))) return;
+    const m = this.map();
+    m.delete(id); // re-added last, so the cap below lets go of the oldest choices first
+    if (color) m.set(id, color.toLowerCase());
+    void this.store.update(KEYS.colors, [...m].slice(-500));
+  }
+}
+
 // ---- the list ---------------------------------------------------------------------------------
 
 class SessionList {
@@ -284,6 +304,7 @@ class SessionList {
     };
     this.asleep = new Asleep(store);
     this.kept = new Kept(store);
+    this.colors = new Colors(store);
     this.stuck = new Map(); // pid -> when a stop of it did not take
     this.saved = new Saved(store, scope, carried, upgrade, id => this.asleep.has(id));
     this.folders = new Folders(store);
@@ -458,6 +479,7 @@ class SessionList {
     switch (a.type) {
       case 'ack': this.attention.delete(a.id); this.asleep.clearReady(a.id); break;
       case 'keep': this.kept.toggle(a.id); break;
+      case 'color': this.colors.set(a.id, a.color); break;
       // The star: mark an idle running session green to come back to it, or clear that mark.
       case 'mark': {
         if (!this.liveIds.has(a.id)) break;
@@ -490,14 +512,16 @@ class SessionList {
 
   // A stopped session: asleep if the panel stopped it (green still if its reply is unread), else
   // not running.
-  offlineRow(e, dismissed, kept) {
+  colorOf(id) { return this.colors.map().get(id) || null; }
+
+  offlineRow(e, dismissed, kept, colors) {
     const a = this.asleep.get(e.id);
     const attention = a && a.ready && !dismissed ? 'ready' : null;
     return {
       id: e.id, pid: null, name: this.transcripts.displayName({ sessionId: e.id, cwd: e.cwd, name: e.name }), cwd: e.cwd,
       repo: path.basename(e.cwd) || '?', status: a ? 'asleep' : 'offline', attention, dismissed, handle: e.handle || '',
       waitingFor: '', since: e.since, startedAt: e.startedAt || e.since, closed: false, folder: this.folders.of(e.id),
-      keep: kept.has(e.id), stopping: false, canStop: !!a,
+      keep: kept.has(e.id), stopping: false, canStop: !!a, color: colors.get(e.id) || null,
       cost: attention ? this.transcripts.replyCost(this.transcripts.readTranscript({ sessionId: e.id, cwd: e.cwd }).reply) : null,
     };
   }
@@ -507,6 +531,7 @@ class SessionList {
     const clearMs = this.removedClearMs();
     const shown = cwd => showAll || this.scope.shows(cwd);
     const kept = this.kept.ids();
+    const colors = this.colors.map();
     this.asleep.load();
     const rows = [];
     // Stopped sessions: on the saved list or in Removed.
@@ -516,7 +541,7 @@ class SessionList {
       if (!dismissed && !this.saved.listed.has(e.id)) continue;
       if (dismissed && this.removed.expired(e.id, now, clearMs)) continue;
       if (!shown(e.cwd)) continue;
-      rows.push(this.offlineRow(e, dismissed, kept));
+      rows.push(this.offlineRow(e, dismissed, kept, colors));
     }
     // Running sessions.
     for (const r of this.regs) {
@@ -535,6 +560,7 @@ class SessionList {
         closed: status === 'idle' && t.closed, folder: this.folders.of(id),
         cost: attention === 'ready' ? this.transcripts.replyCost(t.reply) : null,
         keep: kept.has(id), stopping: !!(this.asleep.get(id) && this.asleep.get(id).pid === r.pid), canStop: this.stoppable(r),
+        color: colors.get(id) || null,
       });
     }
     // Filed sessions no list above holds (ended here, or another window's): shown from the folder's copy.
@@ -542,7 +568,7 @@ class SessionList {
     for (const [id, f] of this.folders.filed) {
       if (listed.has(id) || this.liveIds.has(id) || this.removed.has(id)) continue;
       if (!shown(f.entry.cwd)) continue;
-      rows.push(this.offlineRow(f.entry, false, kept));
+      rows.push(this.offlineRow(f.entry, false, kept, colors));
     }
     const rank = x => (x.attention === 'waiting' ? 0 : x.attention === 'ready' ? 1 : x.status === 'busy' ? 2 : x.closed ? 4 : 3);
     // Ready sessions: the one that takes least of your time first.

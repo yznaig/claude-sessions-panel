@@ -18,6 +18,14 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
 .dot.busy { opacity: 1; background: transparent; border: 2px solid var(--vscode-progressBar-background, #0e70c0); border-top-color: transparent; width: 8px; height: 8px; animation: spin 0.9s linear infinite; }
 .dot.ready { opacity: 1; background: var(--vscode-testing-iconPassed, #73c991); box-shadow: 0 0 6px var(--vscode-testing-iconPassed, #73c991); }
 .dot.waiting { opacity: 1; background: var(--vscode-charts-blue, #3794ff); box-shadow: 0 0 6px var(--vscode-charts-blue, #3794ff); animation: pulse 1.2s ease-in-out infinite; }
+/* a color you chose: it fills the dot, and the state keeps its shape (spinner, glow, ring) */
+.dotcell { align-self: stretch; display: flex; align-items: center; justify-content: center; }
+.dotcell .dot { flex: none; }
+.hittop .dot { justify-self: center; }
+.dot.tinted { opacity: 1; background: var(--c); box-shadow: none; }
+.dot.tinted.ready, .dot.tinted.waiting { box-shadow: 0 0 6px var(--c); }
+.dot.tinted.busy { background: transparent; border-color: var(--c); border-top-color: transparent; }
+.dot.tinted.closed, .dot.tinted.asleep, .dot.tinted.offline { background: transparent; border-color: var(--c); }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.35); } }
 .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -102,3 +110,9 @@ h4 { margin: 10px 0 4px; font-weight: 600; color: var(--vscode-descriptionForegr
 #bar button.moon { border-color: transparent; opacity: 0.6; }
 #bar button.moon:hover { opacity: 1; }
 #bar button.moon.on { opacity: 1; border-color: var(--vscode-charts-purple, #b180d7); background: color-mix(in srgb, var(--vscode-charts-purple, #b180d7) 18%, transparent); }
+
+/* the dot color menu */
+.menu .swatches { display: grid; grid-template-columns: repeat(8, 18px); gap: 6px; padding: 4px 12px 6px; }
+.menu .swatch { width: 18px; height: 18px; border-radius: 50%; border: none; padding: 0; cursor: pointer; }
+.menu .swatch:hover { transform: scale(1.15); }
+.menu .swatch.on { outline: 2px solid var(--vscode-focusBorder, #0078d4); outline-offset: 2px; }

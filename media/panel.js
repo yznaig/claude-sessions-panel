@@ -37,7 +37,7 @@
   function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
 
   // ---- pop-up menu (the ⋯ button and right-click) ----
-  // items: { heading } | '-' | { label, run, current }
+  // items: { heading } | '-' | { label, run, current } | { swatches: [[name, color]], current, pick }
   function closeMenu() { if (menu) { menu.remove(); menu = null; } }
   function openMenu(x, y, items) {
     closeMenu();
@@ -45,6 +45,18 @@
     for (const it of items) {
       if (it === '-') { menu.appendChild(el('div', 'sep')); continue; }
       if (it.heading) { menu.appendChild(el('div', 'mhead', it.heading)); continue; }
+      if (it.swatches) {
+        const grid = el('div', 'swatches');
+        for (const [name, color] of it.swatches) {
+          const s = el('button', 'swatch' + (color === it.current ? ' on' : ''));
+          s.style.background = color;
+          s.title = name;
+          s.addEventListener('click', ev => { ev.stopPropagation(); closeMenu(); it.pick(color); });
+          grid.appendChild(s);
+        }
+        menu.appendChild(grid);
+        continue;
+      }
       const b = el('button', 'mitem' + (it.current ? ' current' : ''), (it.current || it.checked ? '✓ ' : '') + it.label);
       b.disabled = !!it.current;
       b.addEventListener('click', ev => { ev.stopPropagation(); closeMenu(); it.run(); });
@@ -60,6 +72,29 @@
   document.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeMenu(); });
   window.addEventListener('blur', closeMenu);
 
+  // ---- dot colors: right-click a session's dot to give it a color of your own ----
+  // Pastels around the panel's greens and blues, with a few warm ones so every dot stays distinct.
+  const PALETTE = [
+    ['Mint', '#a1edc7'], ['Green', '#85d68b'], ['Lime', '#cdeda1'], ['Sage', '#a8c89d'],
+    ['Aqua', '#a1ebed'], ['Teal', '#68cac0'], ['Sky', '#a1d4ed'], ['Blue', '#80a8e5'],
+    ['Periwinkle', '#a1a8ed'], ['Slate', '#a8b7c7'], ['Lavender', '#b8a1ed'], ['Lilac', '#dba1ed'],
+    ['Pink', '#eda1c7'], ['Coral', '#f1a59d'], ['Peach', '#edc7a1'], ['Butter', '#ede0a1'],
+  ];
+  function colorMenu(r, x, y) {
+    openMenu(x, y, [
+      { heading: 'Dot color' },
+      { swatches: PALETTE, current: r.color, pick: color => post({ type: 'color', id: r.id, color }) },
+      '-',
+      { label: 'No color', current: !r.color, run: () => post({ type: 'color', id: r.id, color: null }) },
+    ]);
+  }
+  // The dot, in its own color when it has one; it keeps its shape for the state (spinning, ring).
+  function dot(cls, color) {
+    const d = el('span', 'dot ' + cls);
+    if (color) { d.classList.add('tinted'); d.style.setProperty('--c', color); }
+    return d;
+  }
+
   // The X removes a session from the list and, if it is running in VS Code, stops its process.
   const removeLabel = r => (r.canStop && r.status !== 'asleep' && !r.stopping ? 'Remove from list and stop it' : 'Remove from list');
 
@@ -68,6 +103,7 @@
     for (const f of state.folders) items.push({ label: f, current: r.folder === f, run: () => post({ type: 'move', id: r.id, folder: f }) });
     items.push({ label: '+ New folder…', run: () => post({ type: 'newFolder', id: r.id }) });
     if (r.canStop) items.push('-', { label: 'Keep running (never auto-close)', checked: !!r.keep, run: () => post({ type: 'keep', id: r.id }) });
+    items.push('-', { label: 'Dot color…', run: () => colorMenu(r, x, y) });
     items.push('-', { label: removeLabel(r), run: () => post({ type: 'dismiss', id: r.id }) });
     openMenu(x, y, items);
   }
@@ -109,7 +145,11 @@
     const known = r.handle && r.handle !== r.name ? (offline || asleep ? 'Was ' : '') + r.handle + '\n' : '';
     d.title = known + r.cwd + '\n' + r.id + (offline ? '\nNot running: click to reopen' : '') +
       (asleep ? '\nAsleep: its process was stopped to free memory. Click to wake it; the conversation resumes.' : '');
-    d.appendChild(el('span', 'dot ' + kind));
+    const cell = el('span', 'dotcell');
+    cell.title = 'Right-click for a color';
+    cell.appendChild(dot(kind, r.color));
+    cell.addEventListener('contextmenu', ev => { ev.preventDefault(); ev.stopPropagation(); colorMenu(r, ev.clientX, ev.clientY); });
+    d.appendChild(cell);
     d.appendChild(el('span', 'name', r.name));
     d.appendChild(el('span', 'repo', r.repo));
     // The star: mark an idle session green to come back to it, or clear the mark. Not on running
@@ -261,7 +301,7 @@
     const d = el('div', 'hit');
     d.title = r.cwd + '\n' + r.id + (r.here ? '\nClick to open' + (r.status === 'asleep' ? ' (wakes it)' : '') : '\nFrom another Claude login or the Windows side: click to read its transcript');
     const top = el('div', 'hittop');
-    top.appendChild(el('span', 'dot ' + (r.status === 'ended' ? 'offline' : r.status)));
+    top.appendChild(dot(r.status === 'ended' ? 'offline' : r.status, r.color));
     top.appendChild(el('span', 'name', r.title));
     top.appendChild(el('span', 'repo', r.repo));
     top.appendChild(el('span', 'state ' + r.status, STATUS[r.status] || r.status));

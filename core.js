@@ -263,6 +263,7 @@ class Provider {
       }
       case 'mark': this.back(); list.act({ type: m.type, id: m.id }); break;
       case 'ack': case 'restore': case 'keep': list.act({ type: m.type, id: m.id }); break;
+      case 'color': list.act({ type: 'color', id: m.id, color: m.color }); break;
       case 'dismiss': await this.remove(m.id); break;
       case 'toggleAway': this.setAway(!readAway().away, 'moon'); break;
       case 'toggleAll': this.toggleAll(); return;
@@ -285,7 +286,7 @@ class Provider {
   results(q, all, limit) {
     const own = path.join(path.dirname(sessionsDir()), 'projects') + path.sep;
     return this.index.search(q, { shows: this.shows(all), limit })
-      .map(r => ({ ...r, status: this.list.statusOf(r.id) || 'ended', here: r.file.startsWith(own) }));
+      .map(r => ({ ...r, status: this.list.statusOf(r.id) || 'ended', here: r.file.startsWith(own), color: this.list.colorOf(r.id) }));
   }
 
   // A result opens as a session when Claude Code here keeps it; one from another Claude login or the
