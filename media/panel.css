@@ -112,7 +112,7 @@ h4 { margin: 10px 0 4px; font-weight: 600; color: var(--vscode-descriptionForegr
 #bar button.moon.on { opacity: 1; border-color: var(--vscode-charts-purple, #b180d7); background: color-mix(in srgb, var(--vscode-charts-purple, #b180d7) 18%, transparent); }
 
 /* the dot color menu */
-.menu .swatches { display: grid; grid-template-columns: repeat(8, 18px); gap: 6px; padding: 4px 12px 6px; }
+.menu .swatches { display: grid; grid-template-columns: repeat(12, 18px); gap: 6px; padding: 4px 12px 6px; }
 .menu .swatch { width: 18px; height: 18px; border-radius: 50%; border: none; padding: 0; cursor: pointer; }
 .menu .swatch:hover { transform: scale(1.15); }
 .menu .swatch.on { outline: 2px solid var(--vscode-focusBorder, #0078d4); outline-offset: 2px; }

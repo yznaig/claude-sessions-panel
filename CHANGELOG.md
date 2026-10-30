@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.18.1 — 2026-10-29
+A fuller range of dot colors: the whole color wheel, 12 hues (red through pink) each in a light, medium and deep shade, 36 in all. Colors already chosen stay as they are.
+
 ## 0.18.0 — 2026-10-29
 **Dot colors.** Right-click a session's dot (or pick **Dot color…** in its ⋯ menu) to give it one of 16 pastels, mostly greens, teals and blues, so you can tell sessions apart at a glance; **No color** takes it off. The color replaces the dot's gray, green and blue, but the dot keeps its shape for the state: it still spins while running, glows when ready or waiting, and is a ring when asleep or not running. The row's green or blue background still shows ready and needs-you. Colors are shared by every window and stay through sleep, Removed and restarts; search results show them too.
 

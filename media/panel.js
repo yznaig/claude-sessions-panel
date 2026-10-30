@@ -73,12 +73,14 @@
   window.addEventListener('blur', closeMenu);
 
   // ---- dot colors: right-click a session's dot to give it a color of your own ----
-  // Pastels around the panel's greens and blues, with a few warm ones so every dot stays distinct.
+  // The whole color wheel, 12 hues, each light, medium and deep: one row per shade in the menu.
   const PALETTE = [
-    ['Mint', '#a1edc7'], ['Green', '#85d68b'], ['Lime', '#cdeda1'], ['Sage', '#a8c89d'],
-    ['Aqua', '#a1ebed'], ['Teal', '#68cac0'], ['Sky', '#a1d4ed'], ['Blue', '#80a8e5'],
-    ['Periwinkle', '#a1a8ed'], ['Slate', '#a8b7c7'], ['Lavender', '#b8a1ed'], ['Lilac', '#dba1ed'],
-    ['Pink', '#eda1c7'], ['Coral', '#f1a59d'], ['Peach', '#edc7a1'], ['Butter', '#ede0a1'],
+    ['Light red', '#f4afaf'], ['Light orange', '#f4cfaf'], ['Light yellow', '#f4e8af'], ['Light lime', '#ddf4af'], ['Light green', '#aff4b4'], ['Light mint', '#aff4d7'],
+    ['Light teal', '#aff4f1'], ['Light sky', '#afddf4'], ['Light blue', '#afc6f4'], ['Light indigo', '#b4aff4'], ['Light purple', '#d7aff4'], ['Light pink', '#f4afd7'],
+    ['Red', '#e07b7b'], ['Orange', '#e0aa7b'], ['Yellow', '#e0cf7b'], ['Lime', '#bee07b'], ['Green', '#7be083'], ['Mint', '#7be0b6'],
+    ['Teal', '#7be0dd'], ['Sky', '#7bbee0'], ['Blue', '#7b9de0'], ['Indigo', '#837be0'], ['Purple', '#b67be0'], ['Pink', '#e07bb6'],
+    ['Deep red', '#ce4646'], ['Deep orange', '#ce8546'], ['Deep yellow', '#ceb746'], ['Deep lime', '#a0ce46'], ['Deep green', '#46ce51'], ['Deep mint', '#46ce95'],
+    ['Deep teal', '#46cec9'], ['Deep sky', '#46a0ce'], ['Deep blue', '#4673ce'], ['Deep indigo', '#5146ce'], ['Deep purple', '#9546ce'], ['Deep pink', '#ce4695'],
   ];
   function colorMenu(r, x, y) {
     openMenu(x, y, [
