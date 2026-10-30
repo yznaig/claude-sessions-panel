@@ -1,5 +1,5 @@
 """Checks for hive.py, run against a throwaway HOME: python3 -m unittest discover -s mod/skills/session-hive/scripts"""
-import json, os, subprocess, sys, tempfile, time, unittest
+import json, os, re, subprocess, sys, tempfile, time, unittest
 
 HIVE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'hive.py')
 
@@ -188,7 +188,7 @@ class Hive(unittest.TestCase):
         v = self.claim('/work/repo/docs/asks.md', who='peer-0002')
         self.assertEqual(v['action'], 'refuse')
         self.assertIn('work-aa has been editing /work/repo/docs/asks.md', v['message'])
-        self.assertIn('Message work-aa first', v['message'])
+        self.assertIn('then retry', v['message'])
         self.assertEqual(self.claim('/work/repo/docs/asks.md', who='peer-0002')['action'], 'allow', 'the retry')
         # The retrying session now holds it, so the first one is the one asked next time.
         self.assertEqual(self.claim('/work/repo/docs/asks.md')['action'], 'refuse')
@@ -283,6 +283,153 @@ class Hive(unittest.TestCase):
         mine = self.run_hive('peers', self_id='peer-0002')
         self.assertIn('You are a sub-session of **work-aa**', mine)
         self.assertIn('A thread moved out of this session: runner-lane design → work-aa', mine)
+
+    # --- events: decided, role, moved, note, and the fold ---
+
+    def elsewhere(self):
+        """A live session in another workspace."""
+        p = subprocess.Popen(['sleep', '60'])
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        return self.register(p.pid, 'far-0003', 'other-cc', '/elsewhere')
+
+    def since(self, *args, who='me-0001'):
+        return self.run_hive('since', *args, self_id=who)
+
+    def add_log(self, rec):
+        os.makedirs(os.path.join(self.home, '.claude', 'session-hive'), exist_ok=True)
+        with open(os.path.join(self.home, '.claude', 'session-hive', 'log.ndjson'), 'a') as f:
+            f.write(json.dumps(rec) + '\n')
+
+    def test_decide_prints_a_date_based_id_and_logs_the_decision(self):
+        day = time.strftime('%m%d')
+        first = self.run_hive('decide', '--workspace', '/work/repo', '--area', 'runner', 'no fourth account').strip()
+        second = self.run_hive('decide', '--workspace', '/work/repo/', '--area', 'qa', 'ship it', self_id='peer-0002').strip()
+        self.assertEqual((first, second), (f'e{day}-01', f'e{day}-02'))
+        rec = self.log()[0]
+        self.assertEqual({k: rec[k] for k in ('dir', 'id', 'from', 'workspace', 'area', 'text')},
+                         {'dir': 'decided', 'id': f'e{day}-01', 'from': 'work-aa', 'workspace': '/work/repo',
+                          'area': 'runner', 'text': 'no fourth account'})
+        self.assertEqual(self.log()[1]['workspace'], '/work/repo', 'the path is normalised')
+        self.assertIn(f'work-aa recorded decision [e{day}-01] runner (/work/repo): no fourth account', self.run_hive('log'))
+
+    def test_decide_keeps_the_text_to_one_line(self):
+        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', 'first line\nsecond line')
+        self.assertEqual(self.log()[-1]['text'], 'first line second line')
+
+    def test_role_and_who_name_the_latest_holder(self):
+        self.run_hive('role', '--workspace', '/work/repo', '--area', 'runner', '--role', 'builder', self_id='peer-0002')
+        self.assertEqual(self.run_hive('who', '--workspace', '/work/repo', '--area', 'runner', '--role', 'builder').strip(), 'work-bb')
+        self.run_hive('role', '--workspace', '/work/repo', '--area', 'runner', '--role', 'builder')
+        self.assertEqual(self.run_hive('who', '--workspace', '/work/repo', '--area', 'Runner', '--role', 'builder').strip(), 'work-aa')
+        self.assertEqual(self.run_hive('who', '--workspace', '/work/repo', '--area', 'qa', '--role', 'builder', ok=False), '')
+        self.assertEqual(self.run_hive('who', '--workspace', '/elsewhere', '--area', 'runner', '--role', 'builder', ok=False), '')
+        self.assertIn('work-aa holds role builder for runner (/work/repo)', self.run_hive('log'))
+
+    def test_the_fold_shows_other_sessions_events_one_line_each(self):
+        day = time.strftime('%m%d')
+        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'runner', 'no fourth account (work-10)', self_id='peer-0002')
+        self.run_hive('role', '--workspace', '/work/repo', '--area', 'runner', '--role', 'builder', self_id='peer-0002')
+        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', 'my own decision')
+        out = self.since()
+        self.assertIn('Since you last looked', out)
+        lines = [l for l in out.splitlines() if re.match(r'\d\d-\d\d \d\d:\d\d ', l)]
+        self.assertEqual(len(lines), 2, out)
+        self.assertRegex(lines[0], r'^\d\d-\d\d \d\d:\d\d role runner: work-bb is builder$')
+        self.assertRegex(lines[1], rf'^\d\d-\d\d \d\d:\d\d decided \[e{day}-01\] runner: no fourth account \(work-10\) \(work-bb\)$')
+        self.assertNotIn('my own decision', out, "a session's own events are not news to it")
+
+    def test_the_cursor_moves_only_when_the_block_is_taken(self):
+        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', 'item one', self_id='peer-0002')
+        self.assertIn('item one', self.since())
+        self.assertIn('item one', self.since('--take'), 'a plain look does not move the cursor')
+        self.assertEqual(self.since('--take'), '', 'nothing new: no block at all')
+        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', 'item two', self_id='peer-0002')
+        out = self.since('--take')
+        self.assertIn('item two', out)
+        self.assertNotIn('item one', out)
+
+    def test_the_cursor_is_per_session(self):
+        far = self.elsewhere()
+        self.run_hive('decide', '--workspace', '/elsewhere', '--area', 'qa', 'far news', self_id='peer-0002')
+        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', 'near news', self_id='peer-0002')
+        self.since('--take')
+        self.assertEqual(self.since('--take'), '')
+        self.assertIn('far news', self.since('--take', who=far['sessionId']), 'another session has its own cursor')
+
+    def test_the_fold_is_capped_at_eight_lines_newest_first(self):
+        for i in range(11):
+            self.add_log({'at': time.time() - 100 + i, 'dir': 'decided', 'id': f'e-{i:02d}', 'from': 'work-bb',
+                          'workspace': '/work/repo', 'area': 'qa', 'text': f'item {i:02d}'})
+        out = self.since('--take')
+        lines = [l for l in out.splitlines() if ' decided ' in l]
+        self.assertEqual(len(lines), 8)
+        self.assertIn('item 10', lines[0])
+        self.assertIn('item 03', lines[-1])
+        self.assertIn('3 more', out)
+
+    def test_a_session_with_no_cursor_sees_only_the_past_48_hours(self):
+        now = time.time()
+        self.add_log({'at': now - 49 * 3600, 'dir': 'decided', 'id': 'e-old', 'from': 'work-bb',
+                      'workspace': '/work/repo', 'area': 'qa', 'text': 'too old'})
+        self.add_log({'at': now - 47 * 3600, 'dir': 'decided', 'id': 'e-new', 'from': 'work-bb',
+                      'workspace': '/work/repo', 'area': 'qa', 'text': 'recent enough'})
+        out = self.since()
+        self.assertIn('recent enough', out)
+        self.assertNotIn('too old', out)
+
+    def test_the_fold_keeps_to_this_workspace_and_takes_events_aimed_at_it(self):
+        far = self.elsewhere()
+        # A session elsewhere deciding something about this workspace: it shows here.
+        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'runner', 'cross-workspace yes', self_id='far-0003')
+        # A session here deciding something about the other workspace: it shows there, not here.
+        self.run_hive('decide', '--workspace', '/elsewhere', '--area', 'qa', 'about elsewhere', self_id='peer-0002')
+        mine = self.since()
+        self.assertIn('cross-workspace yes', mine)
+        self.assertNotIn('about elsewhere', mine)
+        theirs = self.since(who=far['sessionId'])
+        self.assertIn('about elsewhere', theirs)
+        self.assertNotIn('cross-workspace yes', theirs)
+
+    def test_a_thread_moved_note_is_logged_as_its_own_record_and_folded_once(self):
+        self.run_hive('sent', '--to', 'work-cc', stdin='Thread moved: runner-lane design → work-bb\nDetails…', self_id='peer-0002')
+        moved = [r for r in self.log() if r['dir'] == 'moved']
+        self.assertEqual(len(moved), 1)
+        self.assertEqual((moved[0]['from'], moved[0]['to'], moved[0]['thread'], moved[0]['holder']),
+                         ('work-bb', 'work-cc', 'runner-lane design', 'work-bb'))
+        self.assertEqual([r['dir'] for r in self.log()], ['out', 'moved'], 'the message is still logged as sent')
+        out = self.since()
+        self.assertEqual(sum(1 for l in out.splitlines() if 'runner-lane design' in l), 1, out)
+        self.assertRegex(out, r'moved runner-lane design → work-bb \(work-bb to work-cc\)')
+        self.assertIn('work-bb → work-cc  thread moved: runner-lane design → work-bb', self.run_hive('log'))
+
+    def test_messages_spawns_and_claims_are_in_the_fold(self):
+        self.run_hive('sent', '--to', 'work-cc', stdin='FYI: main fails the drift check', self_id='peer-0002')
+        self.run_hive('sent', '--to', 'work-aa', stdin='A question for you', self_id='peer-0002')
+        self.claim('/work/repo/docs/asks.md')
+        self.claim('/work/repo/docs/asks.md', who='peer-0002')
+        self.spawn('notes', who='peer-0002')
+        out = self.since()
+        self.assertRegex(out, r'message work-bb → work-cc: FYI: main fails the drift check')
+        self.assertNotIn('A question for you', out, 'a message to this session reaches it anyway')
+        self.assertRegex(out, r'edit work-bb is about to edit /work/repo/docs/asks.md \(held by work-aa\)')
+        self.assertRegex(out, r'spawn work-bb started notes: Dig into')
+
+    def test_a_note_goes_to_the_log_and_the_fold(self):
+        self.run_hive('note', 'main fails the drift check', self_id='peer-0002')
+        self.assertRegex(self.since(), r'note main fails the drift check \(work-bb\)')
+        self.assertIn('work-bb noted: main fails the drift check', self.run_hive('log'))
+
+    def test_the_claim_refusal_says_the_attempt_is_in_the_holders_fold(self):
+        self.claim('/work/repo/a.md')
+        v = self.claim('/work/repo/a.md', who='peer-0002')
+        self.assertIn("shows in work-aa's", v['message'])
+        self.assertNotIn('Message work-aa first', v['message'])
+
+    def test_the_house_rules_say_what_messages_are_for(self):
+        out = self.run_hive('peers')
+        self.assertIn('Messages are for', out)
+        self.assertIn('`decide --workspace', out)
+        self.assertIn('no matching `decided` event', out)
 
 
 if __name__ == '__main__':
