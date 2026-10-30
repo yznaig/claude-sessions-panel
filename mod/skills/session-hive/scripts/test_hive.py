@@ -108,12 +108,12 @@ class Hive(unittest.TestCase):
             json.dump({'rows': [{'id': 'me-0001', 'folder': 'Later'}]}, f)
         self.assertEqual(self.receive()['action'], 'hold')
 
-    def test_a_fourth_message_in_an_hour_from_one_session_waits_even_when_busy(self):
-        for _ in range(3):
+    def test_an_eleventh_message_in_an_hour_from_one_session_waits_even_when_busy(self):
+        for _ in range(10):
             self.assertEqual(self.receive('--busy', '1')['action'], 'deliver')
         v = self.receive('--busy', '1')
         self.assertEqual(v['action'], 'hold')
-        self.assertIn('work-bb already delivered 3', v['reason'])
+        self.assertIn('work-bb already delivered 10', v['reason'])
         self.assertEqual(self.receive('--busy', '1', sender='work-cc')['action'], 'deliver', 'other senders still get through')
 
     # --- the startup list ---
