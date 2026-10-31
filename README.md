@@ -3,6 +3,7 @@
 A VS Code panel tab (next to Terminal) that lists your live Claude Code sessions and tells you which ones want you.
 
 - **Spinner** — the session is running.
+- **Three cycling dots** — the session is *watching*: done with its turn, but a background command it started (`run_in_background`, Monitor) is still going and will wake it when it ends, such as a deploy or a CI run it is waiting on. The row says what it watches (`watching · Poll deploy for d98af1fd`; the whole description on hover) and sorts with running sessions. It turns green when the watch ends and it has replied. Unlike a running session, it takes a new prompt at once.
 - **Green** — it finished a turn and has a response you haven't looked at yet.
 - **Time chip** on each green row: roughly how long the reply will take you, so you can clear the quick ones first and get them running again while you take the long ones. Green rows sort shortest first. The estimate reads the turn's final reply (the text after its last tool call) at 230 words a minute and adds 45 seconds per numbered item, since replies number only the decisions they ask of you. The chip runs from teal (quick) through amber to red (8 minutes or more); hover it for the breakdown. With two or more on a tab, a line under the list totals them.
 - **Blue** — it is waiting on you: a permission, a question, an MCP dialog.
@@ -38,7 +39,7 @@ A second view, **Usage**, shows the current usage windows of every Claude Code a
 
 ## How it works
 
-Claude Code keeps a registry of its running processes at `~/.claude/sessions/<pid>.json` with the session id, folder, name, and a status of `busy`, `idle` or `waiting`. The extension watches that folder, drops entries whose process is gone, and derives **ready** from a `busy → idle` change. The sessions it lists are saved in VS Code's extension storage, which is how they come back after a restart. Nothing is injected into Claude Code; no hooks are needed.
+Claude Code keeps a registry of its running processes at `~/.claude/sessions/<pid>.json` with the session id, folder, name, and a status of `busy`, `idle` or `waiting` (`shell` for a `claude --bg` session watching a background command). The extension watches that folder, drops entries whose process is gone, and derives **ready** from a `busy → idle` change. **Watching** is `shell`, or `idle` with a shell child started from Claude Code's shell snapshot; what it watches comes from the transcript (background commands started and not yet reported finished). The sessions it lists are saved in VS Code's extension storage, which is how they come back after a restart. Nothing is injected into Claude Code; no hooks are needed.
 
 Focusing a session calls the Claude Code extension's own `claude-vscode.editor.open` command with the session id. That command is internal and undocumented, so it may change between extension versions; the command name is a setting if it does.
 
@@ -49,7 +50,7 @@ Focusing a session calls the Claude Code extension's own `claude-vscode.editor.o
 | `extension.js` | The loader: registers the views and Reload Panel, starts the newest installed `core.js`. |
 | `core.js` | The VS Code side: reads the registry and trail, plays sounds, the webview, commands, Alt+Q, Alt+A, the snapshot. |
 | `sessions.js` | Which sessions are listed and how each stands: ready, needs you, removed, filed, asleep, saved for the restart; and when to stop one. No VS Code, no files; everything comes in through its constructor. |
-| `procs.js` | Session processes: is a pid still the session's, stop it, is it running a background command (Linux `/proc`). |
+| `procs.js` | Session processes: is a pid still the session's, stop it, which sessions are running a background command (Linux `/proc`, one pass for all of them). |
 | `transcript.js` | Reading transcripts: titles, "Good to close", the waiting reply and its time estimate. |
 | `window.js` | Which sessions belong to this window. |
 | `away.js` | The moon's file: read and write `away.json`. |

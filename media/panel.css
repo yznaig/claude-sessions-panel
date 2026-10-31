@@ -26,6 +26,14 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
 .dot.tinted.ready, .dot.tinted.waiting { box-shadow: 0 0 6px var(--c); }
 .dot.tinted.busy { background: transparent; border-color: var(--c); border-top-color: transparent; }
 .dot.tinted.closed, .dot.tinted.asleep, .dot.tinted.offline { background: transparent; border-color: var(--c); }
+/* watching a background command: three dots lighting in turn */
+.dot.watching { opacity: 1; background: transparent; width: 13px; height: 10px; border-radius: 0; display: flex; align-items: center; justify-content: space-between; }
+.dot.watching i { width: 3px; height: 3px; border-radius: 50%; background: var(--vscode-progressBar-background, #0e70c0); animation: cycle 1.2s ease-in-out infinite; }
+.dot.watching i:nth-child(2) { animation-delay: 0.2s; }
+.dot.watching i:nth-child(3) { animation-delay: 0.4s; }
+.dot.tinted.watching, .dot.tinted.watching.edge { background: transparent; box-shadow: none; }
+.dot.tinted.watching i { background: var(--c); }
+@keyframes cycle { 0%, 70%, 100% { opacity: 0.2; } 35% { opacity: 1; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.35); } }
 .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -33,7 +41,7 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
 .state { font-size: 0.9em; white-space: nowrap; text-align: right; }
 .state.ready { color: var(--vscode-testing-iconPassed, #73c991); font-weight: 600; }
 .state.waiting { color: var(--vscode-charts-blue, #3794ff); font-weight: 600; }
-.state.busy { color: var(--vscode-progressBar-background, #0e70c0); }
+.state.busy, .state.watching { color: var(--vscode-progressBar-background, #0e70c0); }
 .state.idle { color: var(--vscode-descriptionForeground); }
 .age { font-size: 0.85em; color: var(--vscode-descriptionForeground); white-space: nowrap; text-align: right; }
 .row .x { border: none; opacity: 0; padding: 0 4px; font-size: 1em; }

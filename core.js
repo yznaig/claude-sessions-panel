@@ -16,6 +16,12 @@ const SHOW_ALL_KEY = 'claudeSessions.showAllWindows';
 const STOP_AND_REMOVE = 'Stop and remove';
 const REMOVE_ONLY = 'Remove, keep it running';
 const PUT_TO_SLEEP = 'Put to sleep';
+// Why stopping a session needs a yes: what it is, and what a stop cuts off.
+const RISK = {
+  working: ['still working', 'doing'],
+  waiting: ['waiting for your answer', 'waiting for'],
+  watching: ['watching a background command', 'watching'],
+};
 // The tab each window shows: a folder's name, or '' for Main (the unfiled sessions).
 const VIEW_FOLDER_KEY = 'claudeSessions.viewFolder';
 
@@ -349,7 +355,7 @@ class Provider {
     const status = reg.status || 'idle';
     if (status !== 'idle') {
       const pick = await vscode.window.showInformationMessage(
-        `"${name}" is ${status === 'busy' ? 'still working' : 'waiting for an answer'} in the background. Watch it in a terminal, or click it again once it's done.`,
+        `"${name}" is ${status === 'busy' ? 'still working' : status === 'watching' ? 'watching a background command' : 'waiting for an answer'} in the background. Watch it in a terminal, or click it again once it's done.`,
         'Watch in terminal');
       if (pick === 'Watch in terminal') {
         const t = vscode.window.createTerminal({ name, cwd: reg.cwd || undefined });
@@ -375,7 +381,7 @@ class Provider {
     return true;
   }
 
-  // The X: off the list and its process stopped. A session working or waiting on you asks first.
+  // The X: off the list and its process stopped. A session working, watching or waiting on you asks first.
   async remove(id) {
     if (this.look) this.look(); // what it is doing now, not at the last look
     const risk = this.list.stopRisk(id);
@@ -383,8 +389,8 @@ class Provider {
     if (risk) {
       const row = this.list.rows(true).find(r => r.id === id);
       const pick = await vscode.window.showWarningMessage(
-        `"${row ? row.name : id}" is ${risk === 'working' ? 'still working' : 'waiting for your answer'}. Stop it too?`,
-        { modal: true, detail: `Stopping ends its process and cuts off what it is ${risk === 'working' ? 'doing' : 'waiting for'}. The conversation is saved: ↩ in Removed brings it back until VS Code restarts, and Claude Code's own session list always has it.` },
+        `"${row ? row.name : id}" is ${RISK[risk][0]}. Stop it too?`,
+        { modal: true, detail: `Stopping ends its process and cuts off what it is ${RISK[risk][1]}. The conversation is saved: ↩ in Removed brings it back until VS Code restarts, and Claude Code's own session list always has it.` },
         STOP_AND_REMOVE, REMOVE_ONLY);
       if (!pick) return;
       stop = pick === STOP_AND_REMOVE;
@@ -400,8 +406,8 @@ class Provider {
     if (risk) {
       const row = this.list.rows(true).find(r => r.id === id);
       const pick = await vscode.window.showWarningMessage(
-        `"${row ? row.name : id}" is ${risk === 'working' ? 'still working' : 'waiting for your answer'}. Put it to sleep anyway?`,
-        { modal: true, detail: `Its process ends, which cuts off what it is ${risk === 'working' ? 'doing' : 'waiting for'}. It stays on the list; click it to wake it and the conversation carries on.` },
+        `"${row ? row.name : id}" is ${RISK[risk][0]}. Put it to sleep anyway?`,
+        { modal: true, detail: `Its process ends, which cuts off what it is ${RISK[risk][1]}. It stays on the list; click it to wake it and the conversation carries on.` },
         PUT_TO_SLEEP);
       if (pick !== PUT_TO_SLEEP) return;
     }

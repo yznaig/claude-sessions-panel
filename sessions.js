@@ -329,10 +329,19 @@ class SessionList {
   }
   closedAt(id, cwd) { return this.transcripts.readTranscript({ sessionId: id, cwd }).closed; }
 
+  // Done with its turn but a background command (run_in_background, Monitor) still running, which
+  // will wake it: "watching". Claude Code says so itself for `claude --bg` sessions ("shell"); for the
+  // rest, the command's shell is a child of the session's process.
+  watching(regs) {
+    const shells = this.procs.withBackgroundCommand(new Set(regs.filter(r => this.procs.isHere(r)).map(r => r.pid)));
+    return regs.map(r => (r.status === 'shell' || ((r.status || 'idle') === 'idle' && shells.has(r.pid)) ? { ...r, status: 'watching' } : r));
+  }
+
   // A look at the registry (running sessions) and the trail (what VS Code shows).
   observe(regs, trail) {
     const now = this.now();
     const sounds = [];
+    regs = this.watching(regs);
     this.folders.load();
     this.asleep.load();
     // The most recent time each window's folder showed some session: a switch made by the panel's
@@ -377,7 +386,7 @@ class SessionList {
           this.restore(id);
           if (!this.firstLoad) sounds.push('waiting');
         }
-      } else if (status === 'idle' && prev === 'busy') {
+      } else if (status === 'idle' && (prev === 'busy' || prev === 'watching')) {
         this.attention.set(id, 'ready');
         this.restore(id);
         if (!this.folders.of(id)) sounds.push('ready'); // a filed session's ready is a quiet dot on its tab
@@ -430,11 +439,12 @@ class SessionList {
     if (!r || !this.stoppable(r)) return null;
     if ((r.status || 'idle') === 'busy') return 'working';
     if (r.status === 'waiting' || this.attention.get(id) === 'waiting') return 'waiting';
+    if (r.status === 'watching') return 'watching';
     return null;
   }
 
   // Stops sessions with nothing going on for autoCloseMs: not working, not waiting on you, not kept
-  // running, not on screen, no background command, nothing written by them or a subagent, not shown
+  // running, not on screen, not watching a background command, nothing written by them or a subagent, not shown
   // or hidden. Needs the session-trail mod, and leaves a process that ignored a stop for an hour.
   autoClose(trail, now) {
     const ms = this.autoCloseMs();
@@ -452,7 +462,6 @@ class SessionList {
       const last = Math.max(r.statusUpdatedAt || 0, r.updatedAt || 0, r.startedAt || 0,
         this.transcripts.lastWrite(r), t ? Math.max(t.shownAt || 0, t.hiddenAt || 0) : 0);
       if (now - last < ms) continue;
-      if (this.procs.hasBackgroundCommand(r.pid)) continue;
       this.stop(r);
     }
   }
@@ -490,7 +499,7 @@ class SessionList {
       case 'mark': {
         if (!this.liveIds.has(a.id)) break;
         const reg = this.regs.find(r => r.sessionId === a.id);
-        if (reg && reg.status === 'busy') break; // running: it turns green by itself when the turn ends
+        if (reg && (reg.status === 'busy' || reg.status === 'watching')) break; // it turns green by itself when done
         const now = this.attention.get(a.id);
         if (now === 'ready') this.attention.delete(a.id);
         else if (!now) this.attention.set(a.id, 'ready');
@@ -565,6 +574,7 @@ class SessionList {
         repo: path.basename(r.cwd || '') || '?', status, attention, dismissed, handle: r.name || '',
         waitingFor: r.waitingFor || '', since, startedAt: r.startedAt || since,
         closed: status === 'idle' && t.closed, folder: this.folders.of(id),
+        watchingFor: status === 'watching' ? this.transcripts.watchingFor(r) : '',
         cost: attention === 'ready' ? this.transcripts.replyCost(t.reply) : null,
         keep: kept.has(id), stopping: !!(this.asleep.get(id) && this.asleep.get(id).pid === r.pid), canStop: this.stoppable(r),
         color: colors.get(id) || null, parked: marks.parked.has(id),
@@ -577,7 +587,7 @@ class SessionList {
       if (!shown(f.entry.cwd)) continue;
       rows.push(this.offlineRow(f.entry, false, marks));
     }
-    const rank = x => (x.attention === 'waiting' ? 0 : x.attention === 'ready' ? 1 : x.status === 'busy' ? 2 : x.closed ? 4 : 3);
+    const rank = x => (x.attention === 'waiting' ? 0 : x.attention === 'ready' ? 1 : x.status === 'busy' || x.status === 'watching' ? 2 : x.closed ? 4 : 3);
     // Ready sessions: the one that takes least of your time first.
     const minutes = x => (x.cost ? x.cost.minutes : 0);
     rows.sort((a, b) => rank(a) - rank(b) || minutes(a) - minutes(b) || b.since - a.since);

@@ -100,6 +100,11 @@ const lines = {
   said: (t, { cwd, at, entry = 'claude-vscode', uuid } = {}) => J({ type: 'user', isSidechain: false, cwd, entrypoint: entry, uuid, timestamp: at && new Date(at).toISOString(), message: { role: 'user', content: t } }),
   replied: (t, { cwd, at } = {}) => J({ type: 'assistant', isSidechain: false, cwd, timestamp: at && new Date(at).toISOString(), message: { content: [{ type: 'text', text: t }] } }),
   edited: file => J({ type: 'assistant', isSidechain: false, message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: file } }] } }),
+  // A background command (Bash run_in_background, or Monitor), what its call returned, and the
+  // task notification that it ended.
+  background: (id, description, name = 'Bash') => J({ type: 'assistant', isSidechain: false, message: { content: [{ type: 'tool_use', id, name, input: name === 'Bash' ? { command: 'sleep 60', description, run_in_background: true } : { command: 'tail -f x', description } }] } }),
+  started: (id, text = 'Command running in background with ID: b1. Output is being written to: /tmp/b1.output.') => J({ type: 'user', isSidechain: false, message: { content: [{ type: 'tool_result', tool_use_id: id, content: text }] } }),
+  notified: (id, status = 'completed') => J({ type: 'user', isSidechain: false, message: { role: 'user', content: `<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>${id}</tool-use-id>\n<status>${status}</status>\n<summary>Background command done</summary>\n</task-notification>` } }),
 };
 const words = n => Array.from({ length: n }, (_, i) => 'w' + i).join(' ');
 

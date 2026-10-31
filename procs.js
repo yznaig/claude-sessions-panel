@@ -37,20 +37,23 @@ function stop(rec) {
 }
 
 // A background command (run_in_background, Monitor) is a shell child of the session started from
-// Claude Code's shell snapshot. MCP helpers are children too, but not started that way.
-function hasBackgroundCommand(pid) {
+// Claude Code's shell snapshot. MCP helpers are children too, but not started that way. One pass over
+// the process table for all the given pids: the ones with such a child.
+function withBackgroundCommand(pids) {
+  const found = new Set();
+  if (!pids.size) return found;
   let entries = [];
-  try { entries = fs.readdirSync('/proc'); } catch { return false; }
+  try { entries = fs.readdirSync('/proc'); } catch { return found; }
   for (const e of entries) {
     if (!/^\d+$/.test(e)) continue;
     try {
       const stat = fs.readFileSync(`/proc/${e}/stat`, 'utf8');
       const ppid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
-      if (ppid !== pid) continue;
-      if (fs.readFileSync(`/proc/${e}/cmdline`, 'utf8').includes('.claude/shell-snapshots/')) return true;
+      if (!pids.has(ppid) || found.has(ppid)) continue;
+      if (fs.readFileSync(`/proc/${e}/cmdline`, 'utf8').includes('.claude/shell-snapshots/')) found.add(ppid);
     } catch { /* gone meanwhile */ }
   }
-  return false;
+  return found;
 }
 
-module.exports = { procStartOf, isHere, stop, hasBackgroundCommand };
+module.exports = { procStartOf, isHere, stop, withBackgroundCommand };

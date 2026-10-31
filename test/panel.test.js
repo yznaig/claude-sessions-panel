@@ -123,6 +123,51 @@ withHarness('star: ignored on sessions that need you, are running, or are not ru
   await h.send({ type: 'mark', id: s.id }); eq(h.row('s').attention, null); eq(h.row('s').status, 'offline');
 });
 
+// ---- watching a background command -------------------------------------------
+
+withHarness('watching: done with its turn but a background command running; sorted with running, says what it watches', async h => {
+  const a = h.session('a', { status: 'busy', background: true, transcript: [L.user('merge it'), L.background('t1', 'Poll deploy for d98af1fd'), L.started('t1')] });
+  h.session('run', { status: 'busy' }); h.session('idle');
+  await h.pause(100); // the background shell has started
+  h.start();
+  a.set('idle'); h.step();
+  eq(h.row('a').status, 'watching'); eq(h.row('a').watchingFor, 'Poll deploy for d98af1fd');
+  eq(h.row('a').attention, null, 'no green: it carries on by itself'); same(h.takeSounds(), []);
+  same(h.order(), ['a', 'run', 'idle']);
+  eq(h.snapshot().rows.find(r => r.id === a.id).state, 'watching');
+});
+
+withHarness('watching: Claude Code\'s own "shell" status counts, and a finished watch turns it green', h => {
+  const s = h.session('s', { bg: true, status: 'busy' });
+  h.start();
+  s.set('shell'); h.step();
+  eq(h.row('s').status, 'watching'); eq(h.row('s').watchingFor, ''); same(h.takeSounds(), []);
+  s.set('idle'); h.step();
+  eq(h.row('s').status, 'idle'); eq(h.row('s').attention, 'ready'); same(h.takeSounds(), ['ready']);
+});
+
+withHarness('watching: the label is the latest command still running; finished or refused ones drop out', h => {
+  h.session('s', { status: 'shell', transcript: [
+    L.background('t1', 'Wait for checks'), L.started('t1'),
+    L.background('t2', 'Tail the log', 'Monitor'), L.started('t2', 'Monitor started (task b2, expires in 30m).'),
+    L.background('t3', 'Refused one'), L.started('t3', 'Permission denied'),
+  ] });
+  h.start();
+  eq(h.row('s').watchingFor, 'Tail the log');
+  h.transcript('s', [L.notified('t2')]); h.step();
+  eq(h.row('s').watchingFor, 'Wait for checks');
+  h.transcript('s', [L.notified('t1', 'killed')]); h.step();
+  eq(h.row('s').watchingFor, '');
+});
+
+withHarness('watching: the star is ignored, and the X asks first', async h => {
+  const s = h.session('s', { status: 'shell' });
+  h.start();
+  await h.send({ type: 'mark', id: s.id }); eq(h.row('s').attention, null);
+  h.confirm = undefined; await h.send({ type: 'dismiss', id: s.id });
+  eq(h.asked.length, 1); assert.match(h.asked[0], /watching a background command/); eq(h.row('s').dismissed, false);
+});
+
 // ---- Removed -----------------------------------------------------------------
 
 withHarness('remove and bring back', async h => {

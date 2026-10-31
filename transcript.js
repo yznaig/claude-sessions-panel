@@ -21,10 +21,13 @@ const os = require('os');
 // session is waiting for you to read. Its length and its numbered items (replies
 // number only the decisions they ask of you) give the time it will take you.
 //
+// Watching. The background commands (run_in_background, Monitor) started and not yet reported
+// finished by a task notification: what a session done with its turn is waiting on.
+//
 // Each transcript is read once, then only the bytes added since.
 
 const transcriptCache = new Map(); // sessionId -> entry
-const FRESH = { offset: 0, tail: '', custom: null, ai: null, checking: false, closed: false, closedAt: 0, reply: '' };
+const FRESH = { offset: 0, tail: '', custom: null, ai: null, checking: false, closed: false, closedAt: 0, reply: '', pending: null };
 
 // Your time for a reply: reading at WORDS_PER_MIN, plus MIN_PER_DECISION for each numbered item.
 const WORDS_PER_MIN = 230;
@@ -58,12 +61,34 @@ function blocksOf(r) {
   return Array.isArray(c) ? c : [];
 }
 
+// Background commands still running, by tool call id -> the command's description.
+const pendingOf = entry => entry.pending || (entry.pending = new Map());
+const BACKGROUND_STARTED = /^(Command running in background|Monitor started)/;
+const isBackground = b => b && b.type === 'tool_use' && b.input &&
+  (b.name === 'Monitor' || (b.name === 'Bash' && b.input.run_in_background === true));
+
+// A tool result for a background command that did not start (refused, failed): not pending.
+function dropUnstarted(entry, line) {
+  if (!entry.pending || !entry.pending.size) return;
+  const ids = [...entry.pending.keys()].filter(id => line.indexOf(id) >= 0);
+  if (!ids.length) return;
+  let r;
+  try { r = JSON.parse(line); } catch { return; }
+  for (const b of blocksOf(r)) {
+    if (!b || b.type !== 'tool_result' || !entry.pending.has(b.tool_use_id)) continue;
+    const c = b.content;
+    const text = typeof c === 'string' ? c : Array.isArray(c) ? c.map(x => (x && x.text) || '').join('') : '';
+    if (!BACKGROUND_STARTED.test(text)) entry.pending.delete(b.tool_use_id);
+  }
+}
+
 function scanLine(entry, line) {
   const isUser = line.indexOf('"type":"user"') >= 0;
   const isAssistant = line.indexOf('"type":"assistant"') >= 0;
   if (line.indexOf('-title"') < 0 && !isUser && !isAssistant) return;
-  if (isUser && line.indexOf('"tool_result"') >= 0) return;           // tool output, not a prompt
-  if (isAssistant && !entry.checking && line.indexOf(CLOSE_SKILL) < 0 && line.indexOf('"type":"text"') < 0) {
+  if (isUser && line.indexOf('"tool_result"') >= 0) { dropUnstarted(entry, line); return; } // tool output, not a prompt
+  const launch = isAssistant && (line.indexOf('"run_in_background":true') >= 0 || line.indexOf('"name":"Monitor"') >= 0);
+  if (isAssistant && !launch && !entry.checking && line.indexOf(CLOSE_SKILL) < 0 && line.indexOf('"type":"text"') < 0) {
     // Not text: only a tool call matters, which makes the text before it interim.
     if (line.indexOf('"type":"tool_use"') >= 0 && line.indexOf('"isSidechain":true') < 0) entry.reply = '';
     return;
@@ -78,6 +103,11 @@ function scanLine(entry, line) {
     if (r.isMeta) return;
     const texts = blocks.filter(b => b && b.type === 'text').map(b => String(b.text || '').trim()).filter(Boolean);
     const text = texts.join(' ');
+    // A background command finished (or failed, or was stopped).
+    for (const m of text.matchAll(/<task-notification>[\s\S]*?<\/task-notification>/g)) {
+      const id = /<tool-use-id>([^<]+)<\/tool-use-id>/.exec(m[0]);
+      if (id && /<status>[^<]+<\/status>/.test(m[0]) && entry.pending) entry.pending.delete(id[1]);
+    }
     // A prompt can arrive as several blocks (an IDE note first, then the words): any block
     // of the person's own, or a slash command, makes it theirs.
     const typed = texts.some(t => !t.startsWith('<') || t.indexOf('<command-name>') >= 0);
@@ -92,6 +122,7 @@ function scanLine(entry, line) {
     for (const b of blocks) {
       if (b && b.type === 'tool_use' && b.name === 'Skill' && b.input && String(b.input.skill || '') === CLOSE_SKILL) entry.checking = true;
       if (b && b.type === 'tool_use') entry.reply = '';
+      if (isBackground(b) && b.id) pendingOf(entry).set(b.id, String(b.input.description || '').trim());
       if (b && b.type === 'text' && b.text) entry.reply += (entry.reply ? '\n\n' : '') + b.text;
     }
     if (!entry.checking) return;
@@ -141,9 +172,15 @@ function lastWrite(rec) {
   return latest;
 }
 
+// What a watching session waits on: the latest background command still running, '' if unknown.
+function watchingFor(rec) {
+  const p = readTranscript(rec).pending;
+  return p && p.size ? [...p.values()].at(-1) : '';
+}
+
 function displayName(rec) {
   const t = readTranscript(rec);
   return t.custom || t.ai || rec.name || String(rec.sessionId).slice(0, 8);
 }
 
-module.exports = { readTranscript, displayName, replyCost, lastWrite };
+module.exports = { readTranscript, displayName, replyCost, lastWrite, watchingFor };

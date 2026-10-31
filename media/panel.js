@@ -25,9 +25,13 @@
     if (r.attention === 'waiting') return r.waitingFor ? 'needs you: ' + r.waitingFor : 'needs you';
     if (r.attention === 'ready') return 'response ready';
     if (r.status === 'busy') return 'running';
+    if (r.status === 'watching') return r.watchingFor ? 'watching · ' + clip(r.watchingFor, WATCH_LABEL_MAX) : 'watching';
     if (r.status === 'waiting') return 'needs you';
     return 'idle';
   }
+  // Long enough for "Poll deploy for d98af1fd"; the whole description is in the row's tooltip.
+  const WATCH_LABEL_MAX = 36;
+  function clip(text, n) { return text.length > n ? text.slice(0, n - 1).trimEnd() + '…' : text; }
   function clock(ms) {
     if (!ms) return '?';
     const d = new Date(ms), now = new Date();
@@ -100,9 +104,11 @@
     const lum = (0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]) / 255;
     return lum < 0.3 || lum > 0.92;
   }
-  // The dot, in its own color when it has one; it keeps its shape for the state (spinning, ring).
+  // The dot, in its own color when it has one; it keeps its shape for the state (spinning, ring,
+  // three dots lighting in turn while it watches a background command).
   function dot(cls, color) {
     const d = el('span', 'dot ' + cls);
+    if (cls === 'watching') for (let i = 0; i < 3; i++) d.appendChild(el('i'));
     if (color) { d.classList.add('tinted'); d.style.setProperty('--c', color); if (edgy(color)) d.classList.add('edge'); }
     return d;
   }
@@ -162,7 +168,8 @@
     // The name other sessions know it by (myapp-17), when it isn't just the title shown.
     const known = r.handle && r.handle !== r.name ? (offline || asleep ? 'Was ' : '') + r.handle + '\n' : '';
     d.title = known + r.cwd + '\n' + r.id + (offline ? '\nNot running: click to reopen' : '') +
-      (asleep ? '\nAsleep: its process was stopped to free memory. Click to wake it; the conversation resumes.' : '');
+      (asleep ? '\nAsleep: its process was stopped to free memory. Click to wake it; the conversation resumes.' : '') +
+      (r.status === 'watching' ? '\nWatching' + (r.watchingFor ? ': ' + r.watchingFor : ' a background command') + '. It carries on by itself when that finishes.' : '');
     const cell = el('span', 'dotcell');
     cell.title = 'Right-click for a color';
     cell.appendChild(dot(kind, r.color));
@@ -170,9 +177,9 @@
     d.appendChild(cell);
     d.appendChild(el('span', 'name', r.name));
     d.appendChild(el('span', 'repo', r.repo));
-    // The star: mark an idle session green to come back to it, or clear the mark. Not on running
-    // sessions (they turn green by themselves) or ones that need you (already blue).
-    if (!r.dismissed && !r.closed && !offline && !asleep && !r.stopping && r.status !== 'busy' && r.attention !== 'waiting') {
+    // The star: mark an idle session green to come back to it, or clear the mark. Not on running or
+    // watching sessions (they turn green by themselves) or ones that need you (already blue).
+    if (!r.dismissed && !r.closed && !offline && !asleep && !r.stopping && r.status !== 'busy' && r.status !== 'watching' && r.attention !== 'waiting') {
       const marked = r.attention === 'ready';
       const star = el('button', 'star', marked ? '★' : '☆');
       star.title = marked ? 'Clear the green mark' : 'Mark green to come back to it';
@@ -315,7 +322,7 @@
     span.appendChild(document.createTextNode(text.slice(at)));
     return span;
   }
-  const STATUS = { busy: 'running', idle: 'idle', waiting: 'needs you', asleep: 'asleep', ended: 'ended' };
+  const STATUS = { busy: 'running', watching: 'watching', idle: 'idle', waiting: 'needs you', asleep: 'asleep', ended: 'ended' };
   function resultRow(r) {
     const d = el('div', 'hit');
     d.title = r.cwd + '\n' + r.id + (r.here ? '\nClick to open' + (r.status === 'asleep' ? ' (wakes it)' : '') : '\nFrom another Claude login or the Windows side: click to read its transcript');
