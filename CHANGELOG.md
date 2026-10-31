@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.21.1 — 2026-10-31
+Sounds follow the list. A window now plays the ready and waiting sounds only for the sessions it lists, the same filter the rows use, so a session in another window sounds once, from its own window, instead of once per open window. Headless `claude -p` runs in a temp folder, which belong to no window and leave the registry within seconds, no longer chime at all: HIRE's question filter was ringing the ready sound every few seconds with nothing green on the list.
+
 ## 0.21.0 — 2026-10-30
 **Watching.** A session that has finished its turn but left a background command running, such as a deploy or CI run it is waiting on, no longer shows as idle. Its dot is three dots lighting in turn, and the row says what it watches: `watching · Poll deploy for d98af1fd`, with the whole description on hover. It sorts with running sessions and isn't offered the ☆. When the watch ends and the session replies, it turns green with the usual sound. Covers sessions in VS Code (a background shell under the session's process) and `claude --bg` sessions (Claude Code's own `shell` status, which used to show as idle). ✕ and Put to sleep ask first, since stopping it would cut the watch off. Background subagents aren't detected yet.
 

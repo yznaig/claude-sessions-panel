@@ -2,7 +2,8 @@
 // ready, needs you, closed, removed, filed in a folder, asleep, not running since a restart).
 //
 //   const list = new SessionList({ store, transcripts, procs, scope, now, removedClearMs, autoCloseMs, live, ended }, carried)
-//   list.observe(registry, trail) -> sounds to play ('ready' | 'waiting'); also stops sessions quiet for autoCloseMs
+//   list.observe(registry, trail) -> sounds to play ('ready' | 'waiting'), for this window's sessions only;
+//   also stops sessions quiet for autoCloseMs
 //   list.act({ type, id, folder, name, to, stop })   ack | mark | keep | dismiss | restore | move | addFolder | renameFolder | deleteFolder
 //   list.stopRisk(id) -> 'working' | 'waiting' | null: what removing it with stop would cut off
 //   list.rows(showAll) -> the rows to show, in order
@@ -384,12 +385,12 @@ class SessionList {
         if (this.attention.get(id) !== 'waiting') {
           this.attention.set(id, 'waiting');
           this.restore(id);
-          if (!this.firstLoad) sounds.push('waiting');
+          if (!this.firstLoad && this.scope.shows(r.cwd)) sounds.push('waiting');
         }
       } else if (status === 'idle' && (prev === 'busy' || prev === 'watching')) {
         this.attention.set(id, 'ready');
         this.restore(id);
-        if (!this.folders.of(id)) sounds.push('ready'); // a filed session's ready is a quiet dot on its tab
+        if (!this.folders.of(id) && this.scope.shows(r.cwd)) sounds.push('ready'); // a filed session's ready is a quiet dot on its tab
       }
       this.prevStatus.set(id, status);
     }

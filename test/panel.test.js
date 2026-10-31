@@ -40,6 +40,20 @@ withHarness('a turn ending turns a session green with a sound; a click clears it
   eq(h.executed.at(-1)[0], 'claude-vscode.editor.open'); eq(h.executed.at(-1)[1], a.id);
 });
 
+withHarness("another window's session: its turn ending or needing you makes no sound here", h => {
+  // Its own window sounds for it; a headless run in a temp folder (claude -p) is in no window and stays silent.
+  const far = h.session('far', { status: 'busy', cwd: h.other });
+  const tmp = h.session('tmp', { status: 'busy', cwd: '/tmp/filter-agent-x1' });
+  const a = h.session('a', { status: 'busy' });
+  h.start();
+  far.set('idle'); tmp.set('idle'); h.step();
+  same(h.takeSounds(), []); eq(h.row('far'), undefined); eq(h.row('tmp'), undefined);
+  far.set('waiting'); h.step();
+  same(h.takeSounds(), []);
+  a.set('idle'); h.step();
+  same(h.takeSounds(), ['ready'], 'this window\'s own session still sounds');
+});
+
 withHarness('needing you turns a session blue with a sound; running again clears it', h => {
   const a = h.session('a', { status: 'idle' });
   h.start();
