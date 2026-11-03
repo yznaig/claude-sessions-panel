@@ -57,13 +57,13 @@ class Hive(unittest.TestCase):
         with open(os.path.join(snaps, 'away.json'), 'w') as f:
             json.dump({'away': on, 'since': int((time.time() - 60) * 1000) if on else None}, f)
 
-    def run_hive(self, *args, stdin='', self_id='me-0001', ok=True):
+    def run_hive(self, *args, stdin='', self_id='me-0001', ok=True, full=False):
         env = dict(os.environ, HOME=self.home, HIVE_CLAUDE=self.fake_claude())
         p = subprocess.run([sys.executable, '-I', HIVE, '--self', self_id, *args], input=stdin,
                            capture_output=True, text=True, env=env, timeout=30)
         if ok:
             self.assertEqual(p.returncode, 0, p.stderr)
-        return p.stdout
+        return p if full else p.stdout
 
     def receive(self, *args, sender='work-bb', text='Idea: a priority field would help the release notes.'):
         return json.loads(self.run_hive('receive', '--from', sender, *args, stdin=text))
@@ -318,12 +318,27 @@ class Hive(unittest.TestCase):
 
     def test_role_and_who_name_the_latest_holder(self):
         self.run_hive('role', '--workspace', '/work/repo', '--area', 'runner', '--role', 'builder', self_id='peer-0002')
-        self.assertEqual(self.run_hive('who', '--workspace', '/work/repo', '--area', 'runner', '--role', 'builder').strip(), 'work-bb')
+        self.assertEqual(self.run_hive('who', '--workspace', '/work/repo', '--area', 'runner', '--role', 'builder').strip(), 'work-bb (live)')
         self.run_hive('role', '--workspace', '/work/repo', '--area', 'runner', '--role', 'builder')
-        self.assertEqual(self.run_hive('who', '--workspace', '/work/repo', '--area', 'Runner', '--role', 'builder').strip(), 'work-aa')
+        self.assertEqual(self.run_hive('who', '--workspace', '/work/repo', '--area', 'Runner', '--role', 'builder').strip(), 'work-aa (live)')
         self.assertEqual(self.run_hive('who', '--workspace', '/work/repo', '--area', 'qa', '--role', 'builder', ok=False), '')
         self.assertEqual(self.run_hive('who', '--workspace', '/elsewhere', '--area', 'runner', '--role', 'builder', ok=False), '')
         self.assertIn('work-aa holds role builder for runner (/work/repo)', self.run_hive('log'))
+
+    def test_taking_a_role_a_live_session_holds_warns_but_records(self):
+        role = ('role', '--workspace', '/work/repo', '--area', 'runner', '--role', 'builder')
+        self.run_hive(*role, self_id='peer-0002')
+        p = self.run_hive(*role, full=True)
+        self.assertIn('work-bb holds builder for runner and is still live', p.stderr)
+        self.assertEqual(self.log()[-1]['from'], 'work-aa', 'the role is still recorded')
+        self.assertEqual(self.run_hive(*role, full=True).stderr, '', 're-taking your own role is silent')
+
+    def test_a_gone_holder_reads_gone_and_taking_its_role_is_silent(self):
+        role = ('role', '--workspace', '/work/repo', '--area', 'runner', '--role', 'builder')
+        self.run_hive(*role, self_id='peer-0002')
+        os.remove(os.path.join(self.sessions, f"{self.peer['pid']}.json"))   # the peer's process is gone
+        self.assertEqual(self.run_hive('who', *role[1:]).strip(), 'work-bb (gone)')
+        self.assertEqual(self.run_hive(*role, full=True).stderr, '')
 
     def test_the_fold_shows_other_sessions_events_one_line_each(self):
         day = time.strftime('%m%d')

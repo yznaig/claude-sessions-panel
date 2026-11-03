@@ -1,5 +1,8 @@
 # Changelog
 
+## session-trail 0.6.1 (companion mod) — 2026-11-02
+**A quiet session isn't a gone one.** `hive.py who` now says whether the role's holder is still running: `runner-builder-8 (live)` or `(gone)`. `hive.py role` warns, and still records the role, when a different session holding it is still live, since a session showing one turn may be working through subagents. On 2026-10-30 a Desk started a second runner builder on the belief the first was dead; the first was mid-landing.
+
 ## 0.22.0 — 2026-11-02
 **Recap at Desk.** A session whose turn ended after it sent its recap to the Desk (or to the session that started it) shows a purple row and **recap at Desk ↗** instead of green "response ready": you answer it at the Desk. It plays no ready sound (the Desk already got the message), doesn't count on the badge or a folder tab's dot, and sorts after the replies waiting for you. Only messages sent after your last prompt to it count, or after the last message another session sent it, so once you answer it directly, its next reply is green again. Read from the session-hive mod's log (`~/.claude/session-hive/log.ndjson`): the Desk is a session named Desk or the one holding the desk role, and a sub-session's parent comes from `children.json`. Your own dot color still wins on the dot.
 

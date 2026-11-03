@@ -12,7 +12,7 @@
   log    [--hours N]              the message log, newest last
   decide --workspace DIR --area A TEXT   record that the user decided something; prints its id (e1030-07)
   role   --workspace DIR --area A --role R   record that this session now holds role R for area A
-  who    --workspace DIR --area A --role R   the latest holder of that role (exits 1 when there is none)
+  who    --workspace DIR --area A --role R   the latest holder of that role, (live) or (gone); exits 1 when none
   note   TEXT                     one line of fact for other sessions' folds, in place of an FYI message
   since  [--cwd DIR] [--take]     "Since you last looked": other sessions' events in this workspace newer than
                                   this session's cursor (with --take, move the cursor forward)
@@ -621,20 +621,36 @@ def cmd_decide(a):
     return 0
 
 
+def role_holder(a):
+    """The latest `role` record for this workspace, area and role, or None."""
+    ws, area, role = workspace_arg(a.workspace), label(a.area, 60, 'area').lower(), label(a.role, 40, 'role').lower()
+    holders = [r for r in read_lines(LOG) if r.get('dir') == 'role' and r.get('workspace') == ws
+               and (r.get('area') or '').lower() == area and (r.get('role') or '').lower() == role]
+    return max(holders, key=lambda r: r.get('at', 0)) if holders else None
+
+
+def live_ids():
+    return {r.get('sessionId') for r in registry().values()}
+
+
 def cmd_role(a):
     me = writer(a)
+    held = role_holder(a)
+    if held and held.get('fromId') != me.get('sessionId') and held.get('fromId') in live_ids():
+        # A session with one turn and no handoff can be working through subagents (2026-10-30: a Desk
+        # replaced runner-builder-8 mid-landing on that premise). Warn, still record: two holders may be meant.
+        print(f"hive.py: {held.get('from')} holds {a.role} for {a.area} and is still live. A quiet session may be "
+              "working through subagents; check the area's git log before replacing it. Role recorded.", file=sys.stderr)
     append(LOG, {'at': time.time(), 'dir': 'role', **stamp_of(me, a), 'workspace': workspace_arg(a.workspace),
                  'area': label(a.area, 60, 'area'), 'role': label(a.role, 40, 'role')})
     return 0
 
 
 def cmd_who(a):
-    ws, area, role = workspace_arg(a.workspace), label(a.area, 60, 'area').lower(), label(a.role, 40, 'role').lower()
-    holders = [r for r in read_lines(LOG) if r.get('dir') == 'role' and r.get('workspace') == ws
-               and (r.get('area') or '').lower() == area and (r.get('role') or '').lower() == role]
-    if not holders:
+    held = role_holder(a)
+    if not held:
         return 1
-    print(max(holders, key=lambda r: r.get('at', 0)).get('from'))
+    print(f"{held.get('from')} ({'live' if held.get('fromId') in live_ids() else 'gone'})")
     return 0
 
 

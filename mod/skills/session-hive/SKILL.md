@@ -16,7 +16,7 @@ The script is `scripts/hive.py` in this skill's folder; run it with `python3 -I`
 | Messages and events between sessions, last 24 hours (`--hours N` for more) | `log` |
 | What other sessions here did since this session last looked (`--take` moves its place on) | `since` |
 | Record that the user decided something; prints the id to cite (`e1030-07`) | `decide --workspace <path of the area it concerns> --area <area> "<one line>"` |
-| Take a role for an area, or find who holds one | `role` / `who`, each `--workspace <path> --area <area> --role <role>` |
+| Take a role for an area, or find who holds one | `role` / `who`, each `--workspace <path> --area <area> --role <role>`; `who` says (live) or (gone), and `role` warns when a live session holds it |
 | One line of fact for other sessions, in place of an FYI message | `note "<fact>"` |
 | Messages that waited for this session instead of waking it | `held` (it leaves them in place; they reach the session with the user's next prompt) |
 | Start a sub-session for a side thread, after the user said yes | `spawn --name <short-name>`, the brief on stdin |
