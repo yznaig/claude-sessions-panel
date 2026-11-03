@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.23.0 — 2026-11-03
+**Automatic dot colors.** A session's dot takes a color from the job it does, read from its name, its title and the role it took in the session hive: database, schema, db or migration → purple; ship, merge or deploy → green; triage → orange; builder → red. The first rule that matches wins, so a database builder is purple. A keyword matches any word starting with it ("ship" matches "shipping"). The colors are the palette's deep row. A color you pick by right-click still wins; the dot menu gains **Automatic** (back to the rule) and **No color** now means none at all, even where a rule matches. Change or add rules in the setting `claudeSessions.autoColors`. Search results show the same colors.
+
 ## session-trail 0.6.1 (companion mod) — 2026-11-02
 **A quiet session isn't a gone one.** `hive.py who` now says whether the role's holder is still running: `runner-builder-8 (live)` or `(gone)`. `hive.py role` warns, and still records the role, when a different session holding it is still live, since a session showing one turn may be working through subagents. On 2026-10-30 a Desk started a second runner builder on the belief the first was dead; the first was mid-landing.
 

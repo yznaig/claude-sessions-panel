@@ -1180,3 +1180,47 @@ withHarness('recap at Desk: the Desk by role, a sub-session\'s parent, and a tur
   await turn(h, c, 'c', L.peer('and Y?', h.now)); h.advance(60e3); c.set('idle'); h.step();
   eq(h.row('c').attention, 'ready');
 });
+
+// ---- automatic dot colors: by the job in a session's name, title or hive role ---------
+
+const RED = '#ce4646', GREEN = '#46ce51', PURPLE = '#9546ce', ORANGE = '#ce8546';
+
+withHarness('auto colors: builders red, ship and merge green, database purple, triage orange, from name, title or role', async h => {
+  h.session('runner-builder-a3'); h.session('runner-triage-2'); h.session('ship-lane-2'); h.session('merge-pace');
+  h.session('schema-healing-3'); h.session('db-access'); const r = h.session('desk-helper'); h.session('plain'); h.session('shipping-notes');
+  h.session('t', { transcript: [L.aiTitle('Database cleanup for the intake form')] });
+  h.start();
+  h.hive({ dir: 'role', from: 'desk-helper', fromId: r.id, workspace: h.proj, area: 'runner', role: 'triage' });
+  h.hive({ dir: 'role', from: 'db-access', fromId: h.id('db-access'), workspace: h.proj, area: 'db-access', role: 'builder' });
+  h.step();
+  eq(h.row('runner-builder-a3').color, RED); eq(h.row('runner-triage-2').color, ORANGE);
+  eq(h.row('ship-lane-2').color, GREEN); eq(h.row('merge-pace').color, GREEN);
+  eq(h.row('schema-healing-3').color, PURPLE, 'the topic beats builder');
+  eq(h.row('db-access').color, PURPLE, 'a database builder by role is still purple');
+  eq(h.row('desk-helper').color, ORANGE, 'from its hive role alone');
+  eq(h.row('t').color, PURPLE, 'from its title');
+  eq(h.row('plain').color, null);
+  eq(h.row('shipping-notes').color, GREEN, 'a keyword matches the start of a word');
+  eq(h.row('runner-builder-a3').autoColor, RED); eq(h.row('runner-builder-a3').manualColor, null);
+});
+
+withHarness('auto colors: your pick wins; Automatic hands it back; No color stays off; the rules come from settings', async h => {
+  const b = h.session('runner-builder-a3'); h.session('runner-triage-2');
+  h.start();
+  await h.send({ type: 'color', id: b.id, color: '#a1edc7' });
+  eq(h.row('runner-builder-a3').color, '#a1edc7'); eq(h.row('runner-builder-a3').autoColor, RED);
+  await h.send({ type: 'color', id: b.id, color: 'none' });
+  eq(h.row('runner-builder-a3').color, null, 'No color, even though a rule matches'); eq(h.row('runner-builder-a3').manualColor, 'none');
+  await h.send({ type: 'color', id: b.id, color: null });
+  eq(h.row('runner-builder-a3').color, RED, 'Automatic: back to its rule');
+  h.config.autoColors = [{ match: 'triage', color: 'red' }, { match: 'triage', color: '#80a8e5' }, { color: '#000000' }];
+  h.step();
+  eq(h.row('runner-triage-2').color, '#80a8e5', 'a rule with a bad color is skipped'); eq(h.row('runner-builder-a3').color, null, 'only the rules in settings');
+});
+
+test('auto colors: the settings default is the same as the built-in rules', () => {
+  const pkg = require('../package.json');
+  const { DEFAULT_RULES } = require('../autocolor');
+  same(pkg.contributes.configuration.properties['claudeSessions.autoColors'].default, DEFAULT_RULES);
+  same(DEFAULT_RULES.map(r => r.color), [PURPLE, GREEN, ORANGE, RED]);
+});

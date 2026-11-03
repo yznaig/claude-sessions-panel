@@ -1,7 +1,7 @@
 // The session list: which Claude sessions the panel lists, and how each one stands (running,
 // ready, needs you, closed, removed, filed in a folder, asleep, not running since a restart).
 //
-//   const list = new SessionList({ store, transcripts, procs, relays, scope, now, removedClearMs, autoCloseMs, live, ended }, carried)
+//   const list = new SessionList({ store, transcripts, procs, hive, autoColors, scope, now, removedClearMs, autoCloseMs, live, ended }, carried)
 //   list.observe(registry, trail) -> sounds to play ('ready' | 'waiting'), for this window's sessions only;
 //   also stops sessions quiet for autoCloseMs
 //   list.act({ type, id, folder, name, to, stop })   ack | mark | keep | dismiss | restore | move | addFolder | renameFolder | deleteFolder
@@ -11,7 +11,8 @@
 //
 // It touches no VS Code and no files itself. `store` is VS Code's globalState (get/update, shared by
 // every window); `transcripts` reads Claude Code's transcripts (transcript.js); `procs` checks and
-// stops session processes (procs.js); `relays` says whom a session reported to (relays.js, optional); `scope` says which sessions are this window's (window.js); `now`
+// stops session processes (procs.js); `hive` reads the session-hive log: whom a session reported to, the role it took (hivelog.js, optional);
+// `autoColors` gives the rules for automatic dot colors (autocolor.js; undefined = the built-in ones); `scope` says which sessions are this window's (window.js); `now`
 // is the clock. Each saved concern has one owner below: Removed, Saved (the list that survives a
 // restart), Folders, Asleep (sessions the panel stopped), Kept (never auto-close), and the
 // auto-closed record.
@@ -20,6 +21,7 @@
 // stopping controls what is running. An asleep session wakes when clicked (Claude Code resumes it).
 'use strict';
 const path = require('path');
+const { autoColor } = require('./autocolor');
 
 const KEYS = {
   removed: 'claudeSessions.dismissed',
@@ -260,17 +262,19 @@ class Marks {
 }
 
 // ---- Colors: a dot color you chose per session, to tell sessions apart at a glance -------------
-// Saved as [id, '#rrggbb'], shared by every window and kept through sleep, Removed and restarts.
-// The palette lives in the webview; only a plain hex color is accepted here.
+// Saved as [id, '#rrggbb' | 'none'], shared by every window and kept through sleep, Removed and
+// restarts. 'none' is "No color", which also turns the automatic color off; no entry means automatic.
+// The palette lives in the webview; only a plain hex color (or 'none') is accepted here.
 const COLOR = /^#[0-9a-f]{6}$/i;
+const isChoice = c => typeof c === 'string' && (COLOR.test(c) || c === 'none');
 class Colors {
   constructor(store) { this.store = store; }
   map() {
     const s = this.store.get(KEYS.colors, []);
-    return new Map((Array.isArray(s) ? s : []).filter(x => Array.isArray(x) && COLOR.test(x[1])));
+    return new Map((Array.isArray(s) ? s : []).filter(x => Array.isArray(x) && isChoice(x[1])));
   }
   set(id, color) {
-    if (color !== null && !(typeof color === 'string' && COLOR.test(color))) return;
+    if (color !== null && !isChoice(color)) return;
     const m = this.map();
     m.delete(id); // re-added last, so the cap below lets go of the oldest choices first
     if (color) m.set(id, color.toLowerCase());
@@ -281,8 +285,9 @@ class Colors {
 // ---- the list ---------------------------------------------------------------------------------
 
 class SessionList {
-  constructor({ store, transcripts, procs, relays, scope, now, removedClearMs, autoCloseMs, live, ended }, carried) {
-    this.relays = relays || null;
+  constructor({ store, transcripts, procs, hive, autoColors, scope, now, removedClearMs, autoCloseMs, live, ended }, carried) {
+    this.hive = hive || null;
+    this.autoColors = autoColors || (() => undefined);
     this.store = store;
     this.transcripts = transcripts;
     this.procs = procs;
@@ -433,8 +438,8 @@ class SessionList {
   // A ready session that reported to the Desk (or the session that started it) during its latest
   // turn: its reply is answered there, so it is shown as 'relayed', apart from replies for you.
   relayOf(r) {
-    if (!this.relays) return null;
-    return this.relays.to(r.sessionId, this.transcripts.readTranscript(r).turnAt);
+    if (!this.hive) return null;
+    return this.hive.reportedTo(r.sessionId, this.transcripts.readTranscript(r).turnAt);
   }
 
   // A session's state for search results: its live status, asleep, or null when not running.
@@ -537,7 +542,17 @@ class SessionList {
 
   // A stopped session: asleep if the panel stopped it (green still if its reply is unread), else
   // not running.
-  colorOf(id) { return this.colors.map().get(id) || null; }
+  // A session's dot color: the one you picked, else the automatic one for its job ('none' = off).
+  // `texts` are its name and title; the role it took in the hive is added here.
+  dotColor(id, manual, texts) {
+    const role = this.hive ? this.hive.roleOf(id) : null;
+    const auto = autoColor(this.autoColors(), role ? [...texts, role.area, role.role] : texts);
+    return { manualColor: manual || null, autoColor: auto, color: manual === 'none' ? null : manual || auto };
+  }
+  colorOf(id) {
+    const r = this.reg(id);
+    return this.dotColor(id, this.colors.map().get(id), r ? [r.name, this.transcripts.displayName(r)] : []).color;
+  }
 
   offlineRow(e, dismissed, { kept, parked, colors }) {
     const a = this.asleep.get(e.id);
@@ -548,7 +563,8 @@ class SessionList {
       id: e.id, pid: null, name: this.transcripts.displayName({ sessionId: e.id, cwd: e.cwd, name: e.name }), cwd: e.cwd,
       repo: path.basename(e.cwd) || '?', status: a ? 'asleep' : 'offline', attention, dismissed, handle: e.handle || '',
       waitingFor: '', since: e.since, startedAt: e.startedAt || e.since, closed: false, folder: this.folders.of(e.id),
-      keep: kept.has(e.id), stopping: false, canStop: !!a, color: colors.get(e.id) || null, parked: parked.has(e.id),
+      keep: kept.has(e.id), stopping: false, canStop: !!a, parked: parked.has(e.id),
+      ...this.dotColor(e.id, colors.get(e.id), [e.handle, this.transcripts.displayName({ sessionId: e.id, cwd: e.cwd, name: e.name })]),
       cost: attention === 'ready' ? this.transcripts.replyCost(this.transcripts.readTranscript({ sessionId: e.id, cwd: e.cwd }).reply) : null,
       relayedTo: relayedTo || '',
     };
@@ -593,7 +609,7 @@ class SessionList {
         cost: attention === 'ready' ? this.transcripts.replyCost(t.reply) : null,
         relayedTo: relayedTo || '',
         keep: kept.has(id), stopping: !!(this.asleep.get(id) && this.asleep.get(id).pid === r.pid), canStop: this.stoppable(r),
-        color: colors.get(id) || null, parked: marks.parked.has(id),
+        parked: marks.parked.has(id), ...this.dotColor(id, colors.get(id), [r.name, this.transcripts.displayName(r)]),
       });
     }
     // Filed sessions no list above holds (ended here, or another window's): shown from the folder's copy.

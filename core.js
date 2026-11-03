@@ -31,7 +31,7 @@ function sessionsDir() { return cfg().get('sessionsDir') || path.join(os.homedir
 // ---- registry ---------------------------------------------------------------
 
 const procs = require('./procs');
-const { Relays } = require('./relays');
+const { HiveLog } = require('./hivelog');
 const { procStartOf } = procs;
 
 function pidAlive(rec) {
@@ -664,7 +664,8 @@ function start(host) {
   const scope = windowScope(() => (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath));
   const list = new SessionList({
     store: context.globalState, transcripts, procs, scope, now: () => Date.now(),
-    relays: new Relays(path.join(os.homedir(), '.claude', 'session-hive')),
+    hive: new HiveLog(path.join(os.homedir(), '.claude', 'session-hive')),
+    autoColors: () => cfg().get('autoColors'),
     removedClearMs: () => (cfg().get('removedClearHours') || 12) * 3600e3,
     autoCloseMs: () => { const h = cfg().get('autoCloseHours'); return (typeof h === 'number' && h >= 0 ? h : 4) * 3600e3; },
     live: readRegistry(), ended: () => readRegistry(true),

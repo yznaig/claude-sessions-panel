@@ -94,9 +94,11 @@
   function colorMenu(r, x, y) {
     openMenu(x, y, [
       { heading: 'Dot color' },
-      { swatches: PALETTE, current: r.color, pick: color => post({ type: 'color', id: r.id, color }) },
+      { swatches: PALETTE, current: r.manualColor, pick: color => post({ type: 'color', id: r.id, color }) },
       '-',
-      { label: 'No color', current: !r.color, run: () => post({ type: 'color', id: r.id, color: null }) },
+      // Automatic: the color its name, title or hive role calls for (Settings: Claude Sessions: Auto Colors).
+      { label: r.autoColor ? 'Automatic (by its job)' : 'Automatic (no rule matches)', current: !r.manualColor, run: () => post({ type: 'color', id: r.id, color: null }) },
+      { label: 'No color', current: r.manualColor === 'none', run: () => post({ type: 'color', id: r.id, color: 'none' }) },
     ]);
   }
   // Very dark or very light colors get a faint ring, so they don't vanish into the background.
@@ -172,7 +174,7 @@
       (asleep ? '\nAsleep: its process was stopped to free memory. Click to wake it; the conversation resumes.' : '') +
       (r.status === 'watching' ? '\nWatching' + (r.watchingFor ? ': ' + r.watchingFor : ' a background command') + '. It carries on by itself when that finishes.' : '');
     const cell = el('span', 'dotcell');
-    cell.title = 'Right-click for a color';
+    cell.title = 'Right-click for a color' + (r.autoColor && !r.manualColor ? ' (this one is automatic, from its name or role)' : '');
     cell.appendChild(dot(kind, r.color));
     cell.addEventListener('contextmenu', ev => { ev.preventDefault(); ev.stopPropagation(); colorMenu(r, ev.clientX, ev.clientY); });
     d.appendChild(cell);

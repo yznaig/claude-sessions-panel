@@ -1,18 +1,20 @@
-// Reports between sessions, from the session-hive mod's log (~/.claude/session-hive/log.ndjson):
-// whom a session reported to since a given time, counting only the Desk (by name, or the session
-// holding the desk role) and the session that started it (children.json). A ready session that
-// reported there is answered there, so the panel shows it apart from replies waiting for you.
+// The session-hive mod's log (~/.claude/session-hive/log.ndjson), as the panel needs it:
+// - whom a session reported to since a given time, counting only the Desk (by name, or the session
+//   holding the desk role) and the session that started it (children.json). A ready session that
+//   reported there is answered there, so the panel shows it apart from replies waiting for you.
+// - the role a session took (area and role, like runner/builder), for its automatic dot color.
 // The log is read once, then only what was added.
 //
-//   const relays = new Relays(hiveDir)
-//   relays.to(sessionId, sinceMs) -> the Desk or parent it reported to at or after sinceMs, or null
+//   const hive = new HiveLog(hiveDir)
+//   hive.reportedTo(sessionId, sinceMs) -> the Desk or parent it reported to at or after sinceMs, or null
+//   hive.roleOf(sessionId) -> { area, role } it last took, or null
 'use strict';
 const fs = require('fs');
 const path = require('path');
 
 const KEEP = 20; // messages remembered per session: only the latest turn's matter
 
-class Relays {
+class HiveLog {
   constructor(dir) {
     this.dir = dir;
     this.reset();
@@ -24,6 +26,7 @@ class Relays {
     this.tail = '';
     this.sent = new Map();  // session id -> [{ at, to, from }], oldest first
     this.desks = new Map(); // workspace + area -> who holds the desk role there
+    this.roles = new Map(); // session id -> { area, role } it last took
   }
 
   refresh() {
@@ -64,13 +67,14 @@ class Relays {
       if (list.length > KEEP) list.shift();
       this.sent.set(r.fromId, list);
     } else if (r.dir === 'role' && r.from) {
+      if (r.fromId) this.roles.set(r.fromId, { area: String(r.area || ''), role: String(r.role || '') });
       const key = (r.workspace || '') + '\0' + (r.area || '');
       if (r.role === 'desk') this.desks.set(key, String(r.from));
       else if (this.desks.get(key) === r.from) this.desks.delete(key);
     }
   }
 
-  to(sessionId, since) {
+  reportedTo(sessionId, since) {
     if (!since) return null; // no turn start known: can't tell which reports are this turn's
     this.refresh();
     const list = this.sent.get(sessionId);
@@ -82,6 +86,11 @@ class Relays {
     }
     return null;
   }
+
+  roleOf(sessionId) {
+    this.refresh();
+    return this.roles.get(sessionId) || null;
+  }
 }
 
-module.exports = { Relays };
+module.exports = { HiveLog };

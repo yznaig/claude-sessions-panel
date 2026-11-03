@@ -2,7 +2,7 @@
   "name": "claude-sessions-panel",
   "displayName": "Claude Sessions",
   "description": "A bottom-panel tab listing your live Claude Code sessions: running, response ready (green), needs an answer (blue). Click to focus the session. Plus a Usage view: the current usage windows of every Claude Code and Codex login on the machine.",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "publisher": "yznaig",
   "license": "MIT",
   "author": "yznaig",
@@ -173,6 +173,24 @@
           "default": 4,
           "minimum": 0,
           "description": "Stop a Claude Code session's process after this many hours with no activity, to free its memory. It stays on the list as asleep; click it to wake it. Never stops a session that is working, waiting for you, running a background command, or marked Keep running. 0 turns it off."
+        },
+        "claudeSessions.autoColors": {
+          "type": "array",
+          "default": [
+            { "match": "database|schema|db|migration", "color": "#9546ce" },
+            { "match": "ship|merge|deploy", "color": "#46ce51" },
+            { "match": "triage", "color": "#ce8546" },
+            { "match": "builder", "color": "#ce4646" }
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "match": { "type": "string", "description": "Keywords separated by |. Each matches any word in the session's name, title or hive role that starts with it." },
+              "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "description": "The dot color, as #rrggbb." }
+            },
+            "required": ["match", "color"]
+          },
+          "markdownDescription": "Automatic dot colors by the job a session does, read from its name, its title and the role it took in the session hive. Tried in order; the first rule that matches wins, so put topics (database) before generic jobs (builder). A color you pick by right-clicking the dot wins; **Automatic** in that menu hands it back."
         },
         "claudeSessions.searchFolders": {
           "type": "array",
