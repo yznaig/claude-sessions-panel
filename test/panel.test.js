@@ -1121,3 +1121,62 @@ withHarness('parked: its own mark from the menu, not a folder; shared, kept thro
   eq(h.row('a').parked, true, 'still parked asleep and in Removed');
   await h.send({ type: 'park', id: a.id }); eq(h.row('a').parked, false);
 });
+
+// ---- recap at the Desk: a ready session that reported to the Desk -----------------
+
+// A turn: your prompt (or another session's message) at the clock's time, then the session works.
+async function turn(h, s, name, prompt = L.said('go', { at: h.now })) {
+  h.transcript(name, [prompt]); s.set('busy'); h.step();
+}
+
+withHarness('recap at Desk: a session that reported to the Desk this turn is quiet, off the badge, and after the ready ones', async h => {
+  const s = h.session('s'); const r = h.session('r'); const i = h.session('i');
+  h.start();
+  await turn(h, s, 's'); await turn(h, r, 'r');
+  h.advance(60e3); h.hiveSent('s', 'Desk');
+  s.set('idle'); h.step();
+  eq(h.row('s').attention, 'relayed'); eq(h.row('s').relayedTo, 'Desk'); eq(h.row('s').cost, null);
+  same(h.takeSounds(), [], 'no ready sound: the Desk already heard');
+  eq(h.panel.badge, undefined);
+  r.set('idle'); h.step();
+  eq(h.row('r').attention, 'ready'); same(h.takeSounds(), ['ready']);
+  eq(h.panel.badge.value, 1, 'only the reply waiting for you counts');
+  h.advance(5000); i.set('idle'); h.step(); // idle, and more recent than both
+  same(h.order(), ['r', 's', 'i'], 'ready first, then the recaps, then the rest');
+  const by = Object.fromEntries(h.snapshot().rows.map(x => [x.id.slice(h.prefix.length), x]));
+  eq(by.s.state, 'relayed');
+});
+
+withHarness('recap at Desk: your next prompt starts fresh; a report before the turn, or to anyone else, does not count', async h => {
+  const s = h.session('s'); const o = h.session('o'); const n = h.session('n', { status: 'busy' });
+  h.start();
+  h.hiveSent('s', 'Desk');            // an old report, before this turn
+  h.hiveSent('n', 'Desk');            // n has no transcript: when its turn began is unknown
+  n.set('idle'); h.step();
+  eq(h.row('n').attention, 'ready', 'unknown turn start: shown as ready, never guessed');
+  h.advance(60e3);
+  await turn(h, s, 's'); await turn(h, o, 'o');
+  h.advance(60e3); h.hiveSent('o', 'command-hq-af'); // a note to a peer, not a report
+  s.set('idle'); o.set('idle'); h.step();
+  eq(h.row('s').attention, 'ready'); eq(h.row('o').attention, 'ready');
+  // It reports this time; then you answer it in the session itself, and its next reply is yours.
+  await turn(h, s, 's'); h.advance(60e3); h.hiveSent('s', 'Desk'); s.set('idle'); h.step();
+  eq(h.row('s').attention, 'relayed');
+  h.advance(60e3); await turn(h, s, 's'); h.advance(60e3); s.set('idle'); h.step();
+  eq(h.row('s').attention, 'ready');
+});
+
+withHarness('recap at Desk: the Desk by role, a sub-session\'s parent, and a turn started by another session\'s message', async h => {
+  const a = h.session('a'); const b = h.session('b'); const c = h.session('c');
+  h.start();
+  h.hive({ dir: 'role', from: 'myapp-22', fromId: 'x', workspace: h.proj, area: 'myapp', role: 'desk' });
+  h.hiveChild('b', 'boss');
+  await turn(h, a, 'a'); await turn(h, b, 'b'); await turn(h, c, 'c', L.peer('please check X', h.now));
+  h.advance(60e3);
+  h.hiveSent('a', 'myapp-22'); h.hiveSent('b', 'boss'); h.hiveSent('c', 'Desk');
+  a.set('idle'); b.set('idle'); c.set('idle'); h.step();
+  eq(h.row('a').relayedTo, 'myapp-22'); eq(h.row('b').relayedTo, 'boss'); eq(h.row('c').relayedTo, 'Desk');
+  // The Desk messages c again; c answers in its transcript only: that reply is for you.
+  await turn(h, c, 'c', L.peer('and Y?', h.now)); h.advance(60e3); c.set('idle'); h.step();
+  eq(h.row('c').attention, 'ready');
+});

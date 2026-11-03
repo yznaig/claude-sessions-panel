@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.22.0 — 2026-11-02
+**Recap at Desk.** A session whose turn ended after it sent its recap to the Desk (or to the session that started it) shows a purple row and **recap at Desk ↗** instead of green "response ready": you answer it at the Desk. It plays no ready sound (the Desk already got the message), doesn't count on the badge or a folder tab's dot, and sorts after the replies waiting for you. Only messages sent after your last prompt to it count, or after the last message another session sent it, so once you answer it directly, its next reply is green again. Read from the session-hive mod's log (`~/.claude/session-hive/log.ndjson`): the Desk is a session named Desk or the one holding the desk role, and a sub-session's parent comes from `children.json`. Your own dot color still wins on the dot.
+
 ## 0.21.1 — 2026-10-31
 Sounds follow the list. A window now plays the ready and waiting sounds only for the sessions it lists, the same filter the rows use, so a session in another window sounds once, from its own window, instead of once per open window. Headless `claude -p` runs in a temp folder, which belong to no window and leave the registry within seconds, no longer chime at all: HIRE's question filter was ringing the ready sound every few seconds with nothing green on the list.
 

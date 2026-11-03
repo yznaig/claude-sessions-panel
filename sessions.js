@@ -1,7 +1,7 @@
 // The session list: which Claude sessions the panel lists, and how each one stands (running,
 // ready, needs you, closed, removed, filed in a folder, asleep, not running since a restart).
 //
-//   const list = new SessionList({ store, transcripts, procs, scope, now, removedClearMs, autoCloseMs, live, ended }, carried)
+//   const list = new SessionList({ store, transcripts, procs, relays, scope, now, removedClearMs, autoCloseMs, live, ended }, carried)
 //   list.observe(registry, trail) -> sounds to play ('ready' | 'waiting'), for this window's sessions only;
 //   also stops sessions quiet for autoCloseMs
 //   list.act({ type, id, folder, name, to, stop })   ack | mark | keep | dismiss | restore | move | addFolder | renameFolder | deleteFolder
@@ -11,7 +11,7 @@
 //
 // It touches no VS Code and no files itself. `store` is VS Code's globalState (get/update, shared by
 // every window); `transcripts` reads Claude Code's transcripts (transcript.js); `procs` checks and
-// stops session processes (procs.js); `scope` says which sessions are this window's (window.js); `now`
+// stops session processes (procs.js); `relays` says whom a session reported to (relays.js, optional); `scope` says which sessions are this window's (window.js); `now`
 // is the clock. Each saved concern has one owner below: Removed, Saved (the list that survives a
 // restart), Folders, Asleep (sessions the panel stopped), Kept (never auto-close), and the
 // auto-closed record.
@@ -281,7 +281,8 @@ class Colors {
 // ---- the list ---------------------------------------------------------------------------------
 
 class SessionList {
-  constructor({ store, transcripts, procs, scope, now, removedClearMs, autoCloseMs, live, ended }, carried) {
+  constructor({ store, transcripts, procs, relays, scope, now, removedClearMs, autoCloseMs, live, ended }, carried) {
+    this.relays = relays || null;
     this.store = store;
     this.transcripts = transcripts;
     this.procs = procs;
@@ -390,7 +391,8 @@ class SessionList {
       } else if (status === 'idle' && (prev === 'busy' || prev === 'watching')) {
         this.attention.set(id, 'ready');
         this.restore(id);
-        if (!this.folders.of(id) && this.scope.shows(r.cwd)) sounds.push('ready'); // a filed session's ready is a quiet dot on its tab
+        // A filed session's ready is a quiet dot on its tab; one that reported to the Desk is quiet too.
+        if (!this.folders.of(id) && this.scope.shows(r.cwd) && !this.relayOf(r)) sounds.push('ready');
       }
       this.prevStatus.set(id, status);
     }
@@ -426,6 +428,13 @@ class SessionList {
     if (!this.procs.stop(r)) return false;
     this.asleep.add(r.sessionId, { pid: r.pid, at: this.now(), ready: this.attention.get(r.sessionId) === 'ready' });
     return true;
+  }
+
+  // A ready session that reported to the Desk (or the session that started it) during its latest
+  // turn: its reply is answered there, so it is shown as 'relayed', apart from replies for you.
+  relayOf(r) {
+    if (!this.relays) return null;
+    return this.relays.to(r.sessionId, this.transcripts.readTranscript(r).turnAt);
   }
 
   // A session's state for search results: its live status, asleep, or null when not running.
@@ -532,13 +541,16 @@ class SessionList {
 
   offlineRow(e, dismissed, { kept, parked, colors }) {
     const a = this.asleep.get(e.id);
-    const attention = a && a.ready && !dismissed ? 'ready' : null;
+    let attention = a && a.ready && !dismissed ? 'ready' : null;
+    const relayedTo = attention ? this.relayOf({ sessionId: e.id, cwd: e.cwd }) : null;
+    if (relayedTo) attention = 'relayed';
     return {
       id: e.id, pid: null, name: this.transcripts.displayName({ sessionId: e.id, cwd: e.cwd, name: e.name }), cwd: e.cwd,
       repo: path.basename(e.cwd) || '?', status: a ? 'asleep' : 'offline', attention, dismissed, handle: e.handle || '',
       waitingFor: '', since: e.since, startedAt: e.startedAt || e.since, closed: false, folder: this.folders.of(e.id),
       keep: kept.has(e.id), stopping: false, canStop: !!a, color: colors.get(e.id) || null, parked: parked.has(e.id),
-      cost: attention ? this.transcripts.replyCost(this.transcripts.readTranscript({ sessionId: e.id, cwd: e.cwd }).reply) : null,
+      cost: attention === 'ready' ? this.transcripts.replyCost(this.transcripts.readTranscript({ sessionId: e.id, cwd: e.cwd }).reply) : null,
+      relayedTo: relayedTo || '',
     };
   }
 
@@ -564,7 +576,9 @@ class SessionList {
     for (const r of this.regs) {
       const id = r.sessionId;
       const status = r.status || 'idle';
-      const attention = this.attention.get(id) || null;
+      let attention = this.attention.get(id) || null;
+      const relayedTo = attention === 'ready' ? this.relayOf(r) : null;
+      if (relayedTo) attention = 'relayed';
       const dismissed = this.removed.has(id);
       if (!shown(r.cwd)) continue;
       const since = r.statusUpdatedAt || r.updatedAt || r.startedAt || now;
@@ -577,6 +591,7 @@ class SessionList {
         closed: status === 'idle' && t.closed, folder: this.folders.of(id),
         watchingFor: status === 'watching' ? this.transcripts.watchingFor(r) : '',
         cost: attention === 'ready' ? this.transcripts.replyCost(t.reply) : null,
+        relayedTo: relayedTo || '',
         keep: kept.has(id), stopping: !!(this.asleep.get(id) && this.asleep.get(id).pid === r.pid), canStop: this.stoppable(r),
         color: colors.get(id) || null, parked: marks.parked.has(id),
       });
@@ -588,7 +603,7 @@ class SessionList {
       if (!shown(f.entry.cwd)) continue;
       rows.push(this.offlineRow(f.entry, false, marks));
     }
-    const rank = x => (x.attention === 'waiting' ? 0 : x.attention === 'ready' ? 1 : x.status === 'busy' || x.status === 'watching' ? 2 : x.closed ? 4 : 3);
+    const rank = x => (x.attention === 'waiting' ? 0 : x.attention === 'ready' ? 1 : x.attention === 'relayed' ? 1.5 : x.status === 'busy' || x.status === 'watching' ? 2 : x.closed ? 4 : 3);
     // Ready sessions: the one that takes least of your time first.
     const minutes = x => (x.cost ? x.cost.minutes : 0);
     rows.sort((a, b) => rank(a) - rank(b) || minutes(a) - minutes(b) || b.since - a.since);

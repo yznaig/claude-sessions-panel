@@ -125,3 +125,8 @@ h4 { margin: 10px 0 4px; font-weight: 600; color: var(--vscode-descriptionForegr
 .menu .swatch:hover { transform: scale(1.15); }
 .menu .swatch.on { outline: 2px solid var(--vscode-focusBorder, #0078d4); outline-offset: 2px; }
 .dot.tinted.edge, .menu .swatch.edge { box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-foreground, #ccc) 35%, transparent); }
+
+/* recap at the Desk: a ready session that reported to the Desk (or its parent) this turn */
+.row.relayed { background: color-mix(in srgb, var(--vscode-charts-purple, #b180d7) 12%, transparent); }
+.dot.relayed:not(.tinted) { opacity: 1; background: var(--vscode-charts-purple, #b180d7); }
+.state.relayed { color: var(--vscode-charts-purple, #b180d7); font-weight: 600; }

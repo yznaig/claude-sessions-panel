@@ -31,6 +31,7 @@ function sessionsDir() { return cfg().get('sessionsDir') || path.join(os.homedir
 // ---- registry ---------------------------------------------------------------
 
 const procs = require('./procs');
+const { Relays } = require('./relays');
 const { procStartOf } = procs;
 
 function pidAlive(rec) {
@@ -427,7 +428,8 @@ class Provider {
     const live = rows.filter(r => !r.dismissed);
     writeSnapshot(live, this.showAll);
     // A filed session counts only when it needs you; its ready shows as a dot on its folder's tab.
-    const needing = live.filter(r => r.attention === 'waiting' || (r.attention && !r.folder)).length;
+    // One that reported to the Desk is answered there, so it doesn't count either.
+    const needing = live.filter(r => r.attention === 'waiting' || (r.attention === 'ready' && !r.folder)).length;
     if (this.viewFolder && !folders.includes(this.viewFolder)) this.showFolder('');
     if (this.view) {
       this.view.badge = needing ? { value: needing, tooltip: `${needing} Claude session${needing === 1 ? '' : 's'} need${needing === 1 ? 's' : ''} you` } : undefined;
@@ -662,6 +664,7 @@ function start(host) {
   const scope = windowScope(() => (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath));
   const list = new SessionList({
     store: context.globalState, transcripts, procs, scope, now: () => Date.now(),
+    relays: new Relays(path.join(os.homedir(), '.claude', 'session-hive')),
     removedClearMs: () => (cfg().get('removedClearHours') || 12) * 3600e3,
     autoCloseMs: () => { const h = cfg().get('autoCloseHours'); return (typeof h === 'number' && h >= 0 ? h : 4) * 3600e3; },
     live: readRegistry(), ended: () => readRegistry(true),

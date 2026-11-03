@@ -104,6 +104,8 @@ const lines = {
   // task notification that it ended.
   background: (id, description, name = 'Bash') => J({ type: 'assistant', isSidechain: false, message: { content: [{ type: 'tool_use', id, name, input: name === 'Bash' ? { command: 'sleep 60', description, run_in_background: true } : { command: 'tail -f x', description } }] } }),
   started: (id, text = 'Command running in background with ID: b1. Output is being written to: /tmp/b1.output.') => J({ type: 'user', isSidechain: false, message: { content: [{ type: 'tool_result', tool_use_id: id, content: text }] } }),
+  // A message from another session, as Claude Code records it (a meta line with a peer origin).
+  peer: (t, at, from = 'Desk') => J({ type: 'user', isSidechain: false, isMeta: true, origin: { kind: 'peer', name: from }, timestamp: new Date(at).toISOString(), message: { role: 'user', content: 'Another Claude session sent a message:\n<cross-session-message from-name="' + from + '">\n' + t + '\n</cross-session-message>' } }),
   notified: (id, status = 'completed') => J({ type: 'user', isSidechain: false, message: { role: 'user', content: `<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>${id}</tool-use-id>\n<status>${status}</status>\n<summary>Background command done</summary>\n</task-notification>` } }),
 };
 const words = n => Array.from({ length: n }, (_, i) => 'w' + i).join(' ');
@@ -257,6 +259,26 @@ let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
     const file = path.join(dir, 'agent-x.jsonl');
     fs.appendFileSync(file, lines.text('working') + '\n');
     fs.utimesSync(file, this.now / 1000, this.now / 1000);
+  }
+
+  // The session-hive mod's log (~/.claude/session-hive): a message a session sent, a role taken,
+  // a sub-session started.
+  hive(rec) {
+    const dir = path.join(this.home, '.claude/session-hive');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, 'log.ndjson'), J({ at: this.now / 1000, ...rec }) + '\n');
+  }
+  hiveSent(name, to, first = 'Debrief from sub-session ' + name + ': done') {
+    this.hive({ dir: 'out', from: name, fromId: this.id(name), workspace: this.proj, to, first });
+    this.hive({ dir: 'in', from: name, to, action: 'deliver', first });
+  }
+  hiveChild(name, parent) {
+    const file = path.join(this.home, '.claude/session-hive/children.json');
+    let kids = [];
+    try { kids = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* first */ }
+    kids.push({ name, bgId: 'b' + name, parent, parentId: 'p', unattended: false, at: this.now / 1000, cwd: this.proj });
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, J(kids));
   }
 
   trail(name, t) {

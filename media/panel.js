@@ -20,10 +20,11 @@
   function label(r) {
     if (r.closed) return '✓ closed';
     if (r.stopping) return 'stopping…';
-    if (r.status === 'asleep') return r.attention === 'ready' ? 'ready · asleep' : 'asleep';
+    if (r.status === 'asleep') return r.attention === 'ready' ? 'ready · asleep' : r.attention === 'relayed' ? 'recap at ' + r.relayedTo + ' · asleep' : 'asleep';
     if (r.status === 'offline') return 'not running';
     if (r.attention === 'waiting') return r.waitingFor ? 'needs you: ' + r.waitingFor : 'needs you';
     if (r.attention === 'ready') return 'response ready';
+    if (r.attention === 'relayed') return 'recap at ' + r.relayedTo + ' ↗';
     if (r.status === 'busy') return 'running';
     if (r.status === 'watching') return r.watchingFor ? 'watching · ' + clip(r.watchingFor, WATCH_LABEL_MAX) : 'watching';
     if (r.status === 'waiting') return 'needs you';
@@ -180,7 +181,7 @@
     // The star: mark an idle session green to come back to it, or clear the mark. Not on running or
     // watching sessions (they turn green by themselves) or ones that need you (already blue).
     if (!r.dismissed && !r.closed && !offline && !asleep && !r.stopping && r.status !== 'busy' && r.status !== 'watching' && r.attention !== 'waiting') {
-      const marked = r.attention === 'ready';
+      const marked = r.attention === 'ready' || r.attention === 'relayed';
       const star = el('button', 'star', marked ? '★' : '☆');
       star.title = marked ? 'Clear the green mark' : 'Mark green to come back to it';
       star.addEventListener('click', ev => { ev.stopPropagation(); post({ type: 'mark', id: r.id }); });
@@ -190,6 +191,7 @@
     const st = el('span', 'state ' + (asleep && !r.attention ? 'asleep' : kind), (r.parked ? '🔕 ' : '') + (r.keep ? '📌 ' : '') + label(r));
     const marks = [r.parked && 'Parked: other sessions don\'t message it', r.keep && 'Keep running: never auto-closed'].filter(Boolean);
     if (marks.length) st.title = marks.join('\n') + '\n(⋯ to change)';
+    if (r.attention === 'relayed') st.title = `It sent its recap to ${r.relayedTo} this turn: answer it there. Click to open this session anyway.` + (st.title ? '\n' + st.title : '');
     d.appendChild(st);
     d.appendChild(el('span', 'age', age(state.now - r.since)));
     if (r.dismissed) {

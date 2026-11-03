@@ -21,13 +21,15 @@ const os = require('os');
 // session is waiting for you to read. Its length and its numbered items (replies
 // number only the decisions they ask of you) give the time it will take you.
 //
+// Turn. When the latest turn began: your last prompt, or the last message another session sent it.
+//
 // Watching. The background commands (run_in_background, Monitor) started and not yet reported
 // finished by a task notification: what a session done with its turn is waiting on.
 //
 // Each transcript is read once, then only the bytes added since.
 
 const transcriptCache = new Map(); // sessionId -> entry
-const FRESH = { offset: 0, tail: '', custom: null, ai: null, checking: false, closed: false, closedAt: 0, reply: '', pending: null };
+const FRESH = { offset: 0, tail: '', custom: null, ai: null, checking: false, closed: false, closedAt: 0, reply: '', pending: null, turnAt: 0 };
 
 // Your time for a reply: reading at WORDS_PER_MIN, plus MIN_PER_DECISION for each numbered item.
 const WORDS_PER_MIN = 230;
@@ -100,7 +102,8 @@ function scanLine(entry, line) {
   if (r.isSidechain) return;                                            // a subagent's own transcript rows
   const blocks = blocksOf(r);
   if (r.type === 'user') {
-    if (r.isMeta) return;
+    // Another session's message starts a turn too (Claude Code records it as a meta line).
+    if (r.isMeta) { if (r.origin && r.origin.kind === 'peer') entry.turnAt = Date.parse(r.timestamp) || entry.turnAt; return; }
     const texts = blocks.filter(b => b && b.type === 'text').map(b => String(b.text || '').trim()).filter(Boolean);
     const text = texts.join(' ');
     // A background command finished (or failed, or was stopped).
@@ -112,6 +115,7 @@ function scanLine(entry, line) {
     // of the person's own, or a slash command, makes it theirs.
     const typed = texts.some(t => !t.startsWith('<') || t.indexOf('<command-name>') >= 0);
     if (!typed) return;                                                 // a reminder or notice, not the person
+    entry.turnAt = Date.parse(r.timestamp) || entry.turnAt;
     entry.checking = text.indexOf('<command-name>/' + CLOSE_SKILL) >= 0;
     entry.closed = false;
     entry.closedAt = 0;
