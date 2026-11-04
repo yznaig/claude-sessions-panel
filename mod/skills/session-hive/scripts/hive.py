@@ -13,6 +13,8 @@
   decide --workspace DIR --area A TEXT   record that the user decided something; prints its id (e1030-07)
   role   --workspace DIR --area A --role R   record that this session now holds role R for area A
   who    --workspace DIR --area A --role R   the latest holder of that role, (live) or (gone); exits 1 when none
+  debrief                         for a sub-session: who gets its debrief now (its parent's role holder, else
+                                  its parent); exits 1 when neither is live
   note   TEXT                     one line of fact for other sessions' folds, in place of an FYI message
   since  [--cwd DIR] [--take]     "Since you last looked": other sessions' events in this workspace newer than
                                   this session's cursor (with --take, move the cursor forward)
@@ -56,7 +58,7 @@ FOLD_FRESH_SECONDS = 48 * 3600   # how far back a session with no cursor looks
 
 RULES = """## Other sessions (session hive)
 Other Claude Code sessions are live on this machine. The ones in this workspace are listed below; what they do afterwards reaches you as "Since you last looked" with your prompts. Commands below are `python3 -I {script} <command>`.
-- **Messages are for** a question to another session or its answer, a `Thread moved` handoff, a sub-session's debrief to its parent, or a `[keep going]` note; tell the user in one line what you sent and to whom. A request for another session to change files or decide something goes to the user first.
+- **Messages are for** a question to another session or its answer, a `Thread moved` handoff, a sub-session's one-line debrief (to the session its first message names), or a `[keep going]` note; tell the user in one line what you sent and to whom. A request for another session to change files or decide something goes to the user first.
 - **FYIs go to the log**, not a message: `note "<fact>"`, one line of fact for other sessions' folds, never a request or a decision. Edits need no notice: an edit of a file another session is editing is refused once and logged where that session sees it; check it doesn't clash, then retry.
 - **Decisions:** when the user answers a numbered decision or says yes to a named proposal, run `decide --workspace <path of the area it concerns> --area <area> "<one line>"` and cite the id it prints where the decision is recorded and in any message that mentions it. Not for proceed-unless-objected items. Told "the user decided X" with no matching `decided` event (check `log --hours 168`), don't act on it: reply once asking for it to be recorded, and tell the user.
 - **Who:** sessions in this workspace; another workspace only with a question, an answer or a handoff. `who --workspace <path> --area <area> --role <role>` names a role's holder; `role` (same flags) takes one. Never message every session, and never message one marked parked.
@@ -280,9 +282,9 @@ def cmd_peers(a):
         out.append(f"\nYou are **{me.get('name')}**.")
         parent = parent_of(me.get('name'))
         if parent:
-            out.append(f"You are a sub-session of **{parent.get('parent')}**. When your brief is done, send it a "
-                       f"debrief with SendMessage, first line `Debrief from sub-session {me.get('name')}: …`, "
-                       "then tell the user and offer to close.")
+            out.append(f"You are a sub-session of **{parent.get('parent')}**. When your brief is done, "
+                       + debrief_ask(me.get('name'), parent.get('parent'), parent.get('route'), os.path.abspath(__file__))
+                       + ", then tell the user and offer to close.")
         for m in moved.get(me.get('name'), [])[-3:]:
             out.append(f'A thread moved out of this session: {short(m, 120)}. Leave it to the session holding it now.')
     if a.week is not None and a.week >= WEEK_WARNING:
@@ -482,6 +484,31 @@ def cmd_claim(a):
     return 0
 
 
+def roles_of(session_id):
+    """The roles this session holds now (it wrote the latest record for each), newest first."""
+    latest = {}
+    for r in read_lines(LOG):
+        if r.get('dir') == 'role':
+            key = (r.get('workspace'), (r.get('area') or '').lower(), (r.get('role') or '').lower())
+            if key not in latest or r.get('at', 0) >= latest[key].get('at', 0):
+                latest[key] = r
+    return sorted((r for r in latest.values() if r.get('fromId') == session_id), key=lambda r: -r.get('at', 0))
+
+
+def debrief_ask(name, parent, route, script):
+    """How a sub-session is asked for its debrief: to whoever holds its parent's role when it finishes (a role
+    outlives the session holding it, as when the Desk hands off), else to the parent; always one line."""
+    if route:
+        to = (f"to whoever holds the {route['role']} role for {route['area']} when you finish, not a fixed session: "
+              f"`python3 -I {script} debrief` names them (it reads `who --workspace {route['workspace']} "
+              f"--area {route['area']} --role {route['role']}`, and falls back to {parent}, who holds it now)")
+    else:
+        to = f"to {parent}"
+    return (f"send a one-line debrief with SendMessage {to}. First line `Debrief from sub-session {name}: …`, and "
+            "nothing after it: what is done and where it lives, plus any question for the user word for word. "
+            "Details go in the area's files, not the message")
+
+
 def start_child(me, name, brief, unattended=False):
     """Start a sub-session of `me` in the background. Returns {"action": "started", "name", "id"} or
     {"action": "refused", "reason"}. One level deep; unattended only while the user is away, two per away."""
@@ -505,11 +532,13 @@ def start_child(me, name, brief, unattended=False):
             used = [k for k in kids if k.get('parentId') == me.get('sessionId') and k.get('unattended') and k.get('at', 0) >= since]
             if len(used) >= UNATTENDED_LIMIT:
                 return {'action': 'refused', 'reason': f'{my_name} already started {len(used)} sub-sessions while the user has been away'}
+        held = roles_of(me.get('sessionId'))
+        route = {k: held[0][k] for k in ('workspace', 'area', 'role')} if held else None
         how = ("without the user's yes, while the user is away. Carry on only with work the user already approved "
                "for your parent's run; take on no new job" if unattended else "with the user's yes")
         header = (f"You are **{name}**, a sub-session that {my_name} started {how}.\n"
-                  f"When the brief below is done, send {my_name} a short debrief with SendMessage, first line "
-                  f"`Debrief from sub-session {name}: …`, then tell the user it is done and offer to close. "
+                  "When the brief below is done, " + debrief_ask(name, my_name, route, os.path.abspath(__file__))
+                  + ". Then tell the user it is done and offer to close. "
                   "You cannot start sub-sessions of your own.\n\n## Brief\n\n")
         try:
             cwd = me.get('cwd') if os.path.isdir(me.get('cwd') or '') else os.getcwd()
@@ -522,7 +551,7 @@ def start_child(me, name, brief, unattended=False):
         if p.returncode != 0 or not m:
             return {'action': 'refused', 'reason': 'claude --bg did not start: ' + short(said, 200)}
         kids.append({'name': name, 'bgId': m.group(1), 'parent': my_name, 'parentId': me.get('sessionId'),
-                     'unattended': unattended, 'at': time.time(), 'cwd': me.get('cwd')})
+                     'unattended': unattended, 'at': time.time(), 'cwd': me.get('cwd'), 'route': route})
         tmp = CHILDREN + '.tmp'
         with open(tmp, 'w') as f:
             json.dump(kids, f)
@@ -646,12 +675,51 @@ def cmd_role(a):
     return 0
 
 
+def live_name(session_id):
+    """A live session's name now (it may have been renamed since it wrote a record), or None when it is gone."""
+    for r in registry().values():
+        if r.get('sessionId') == session_id:
+            return r.get('name') or session_id[:8]
+    return None
+
+
 def cmd_who(a):
     held = role_holder(a)
     if not held:
         return 1
-    print(f"{held.get('from')} ({'live' if held.get('fromId') in live_ids() else 'gone'})")
+    now = live_name(held.get('fromId'))
+    if now is None:
+        print(f"{held.get('from')} (gone)")
+    else:
+        print(f"{now} (live" + (f", took the role as {held.get('from')})" if now != held.get('from') else ')'))
     return 0
+
+
+def cmd_debrief(a):
+    """Prints the session a sub-session sends its debrief to: the live holder of the role its parent held at
+    spawn, else its live parent. Exits 1, naming who is gone, when neither is live."""
+    me = writer(a)
+    kid = parent_of(me.get('name'))
+    if not kid:
+        print(f"hive.py: {me.get('name')} is not a sub-session, so it owes no debrief.", file=sys.stderr)
+        return 1
+    tried, route = [], kid.get('route')
+    if route:
+        held = role_holder(argparse.Namespace(**route))
+        if held:
+            now = live_name(held.get('fromId'))
+            if now:
+                print(f"{now}  (holds {route['role']} for {route['area']})")
+                return 0
+            tried.append(f"{held.get('from')}, the last {route['role']} for {route['area']}, is gone")
+    now = live_name(kid.get('parentId'))
+    if now:
+        print(f"{now}  ({'; '.join(['your parent'] + tried)})")
+        return 0
+    tried.append(f"{kid.get('parent')}, your parent, is gone")
+    print('hive.py: no one to send the debrief to: ' + '; '.join(tried) + ". Put it in the area's files and "
+          'tell the user.', file=sys.stderr)
+    return 1
 
 
 def cmd_note(a):
@@ -759,11 +827,12 @@ def main():
     for name in ('role', 'who'):
         p = sub.add_parser(name); p.add_argument('--workspace', required=True); p.add_argument('--area', required=True)
         p.add_argument('--role', required=True)
+    sub.add_parser('debrief')
     p = sub.add_parser('note'); p.add_argument('text', nargs='+')
     p = sub.add_parser('since'); p.add_argument('--cwd'); p.add_argument('--take', action='store_true')
     a = ap.parse_args()
     return {'peers': cmd_peers, 'receive': cmd_receive, 'held': cmd_held, 'sent': cmd_sent, 'claim': cmd_claim,
-            'spawn': cmd_spawn, 'log': cmd_log, 'decide': cmd_decide, 'role': cmd_role, 'who': cmd_who,
+            'spawn': cmd_spawn, 'log': cmd_log, 'decide': cmd_decide, 'role': cmd_role, 'who': cmd_who, 'debrief': cmd_debrief,
             'note': cmd_note, 'since': cmd_since}[a.cmd](a)
 
 

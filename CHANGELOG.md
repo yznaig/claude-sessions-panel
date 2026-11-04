@@ -1,5 +1,8 @@
 # Changelog
 
+## session-trail 0.7.0 (companion mod) — 2026-11-04
+**Debriefs reach whoever holds the role now, in one line.** A sub-session started by a session holding a hive role (the Desk) is told to debrief whoever holds that role when it finishes, not the session that started it: `hive.py debrief` names them, by their current name, and falls back to the parent when no live session holds the role. On 2026-11-03 three debriefs went to a Desk that had already handed off. The spawn header now asks for one line (what is done and where, plus any question for the user word for word), details in the area's files; the median debrief that night was 1.8 KB. `hive.py who` gives a renamed holder's current name: `Desk (live, took the role as <its earlier name>)`.
+
 ## 0.23.0 — 2026-11-03
 **Automatic dot colors.** A session's dot takes a color from the job it does, read from its name, its title and the role it took in the session hive: database, schema, db or migration → purple; ship, merge or deploy → green; triage → orange; builder → red. The first rule that matches wins, so a database builder is purple. A keyword matches any word starting with it ("ship" matches "shipping"). The colors are the palette's deep row. A color you pick by right-click still wins; the dot menu gains **Automatic** (back to the rule) and **No color** now means none at all, even where a rule matches. Change or add rules in the setting `claudeSessions.autoColors`. Search results show the same colors.
 

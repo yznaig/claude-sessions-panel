@@ -473,7 +473,104 @@ class Hive(unittest.TestCase):
         self.assertLessEqual(len(lines[0]), 200)
 
     def test_a_sub_sessions_debrief_is_an_allowed_message(self):
-        self.assertIn('a sub-session\'s debrief to its parent', self.run_hive('peers'))
+        self.assertIn("a sub-session's one-line debrief (to the session its first message names)", self.run_hive('peers'))
+
+    # --- where a debrief goes ---
+
+    DESK = ('--workspace', '/work/repo', '--area', 'hire', '--role', 'desk')
+
+    def kid(self, route=None, parent_id='me-0001', parent='work-aa'):
+        """A live sub-session, kid-cc, as `spawn` records it."""
+        p = subprocess.Popen(['sleep', '60'])
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        self.register(p.pid, 'kid-0004', 'kid-cc', '/work/repo')
+        os.makedirs(os.path.join(self.home, '.claude', 'session-hive'), exist_ok=True)
+        with open(os.path.join(self.home, '.claude', 'session-hive', 'children.json'), 'w') as f:
+            json.dump([{'name': 'kid-cc', 'parent': parent, 'parentId': parent_id, 'at': time.time(),
+                        'route': route}], f)
+
+    def debrief(self, ok=True):
+        return self.run_hive('debrief', self_id='kid-0004', ok=ok, full=not ok)
+
+    def test_a_role_holders_sub_session_is_told_to_debrief_whoever_holds_the_role(self):
+        self.run_hive('role', *self.DESK)
+        self.spawn('notice drafts')
+        header = self.spawns()[0]['argv'][4].split('## Brief')[0]
+        self.assertIn('to whoever holds the desk role for hire when you finish, not a fixed session', header)
+        self.assertIn('debrief` names them', header)
+        self.assertIn('who --workspace /work/repo --area hire --role desk', header)
+        self.assertIn('falls back to work-aa, who holds it now', header)
+        self.assertNotIn('SendMessage to work-aa', header)
+        with open(os.path.join(self.home, '.claude', 'session-hive', 'children.json')) as f:
+            self.assertEqual(json.load(f)[0]['route'], {'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'})
+
+    def test_a_session_holding_no_role_is_debriefed_by_name(self):
+        self.run_hive('role', *self.DESK, self_id='peer-0002')   # the role is someone else's
+        self.spawn('notice drafts')
+        header = self.spawns()[0]['argv'][4].split('## Brief')[0]
+        self.assertIn('send a one-line debrief with SendMessage to work-aa.', header)
+        self.assertNotIn('whoever holds', header)
+
+    def test_a_role_handed_on_is_no_longer_the_old_holders_route(self):
+        self.run_hive('role', *self.DESK)
+        self.run_hive('role', *self.DESK, self_id='peer-0002')
+        self.spawn('late')
+        self.assertNotIn('whoever holds', self.spawns()[0]['argv'][4])
+
+    def test_the_debrief_is_asked_for_as_one_line_with_questions_word_for_word(self):
+        self.spawn('notice drafts')
+        header = self.spawns()[0]['argv'][4].split('## Brief')[0]
+        self.assertIn('one-line debrief', header)
+        self.assertIn('First line `Debrief from sub-session notice-drafts: …`, and nothing after it', header)
+        self.assertIn('any question for the user word for word', header)
+        self.assertIn("Details go in the area's files, not the message", header)
+        self.assertNotIn('short debrief', header)
+
+    def test_debrief_names_the_current_role_holder_after_a_handoff(self):
+        route = {'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'}
+        self.run_hive('role', *self.DESK)
+        self.kid(route)
+        self.assertEqual(self.debrief().strip(), 'work-aa  (holds desk for hire)')
+        self.run_hive('role', *self.DESK, self_id='peer-0002')   # the Desk hands off
+        self.assertEqual(self.debrief().strip(), 'work-bb  (holds desk for hire)')
+
+    def test_debrief_uses_the_holders_name_now_after_a_rename(self):
+        self.kid({'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'})
+        self.run_hive('role', *self.DESK, self_id='peer-0002')
+        self.register(os.getppid(), 'peer-0002', 'Desk', '/work/repo/.worktrees/x')
+        self.assertEqual(self.debrief().strip(), 'Desk  (holds desk for hire)')
+        self.assertEqual(self.run_hive('who', *self.DESK).strip(), 'Desk (live, took the role as work-bb)')
+
+    def test_debrief_falls_back_to_the_parent_when_the_holder_is_gone_or_there_is_no_role(self):
+        self.kid({'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'})
+        self.assertEqual(self.debrief().strip(), 'work-aa  (your parent)', 'no one holds the role')
+        self.add_log({'at': time.time(), 'dir': 'role', 'from': 'old-desk', 'fromId': 'gone-0009',
+                      'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'})
+        self.assertEqual(self.debrief().strip(), 'work-aa  (your parent; old-desk, the last desk for hire, is gone)')
+        self.kid(None)
+        self.assertEqual(self.debrief().strip(), 'work-aa  (your parent)', 'spawned by a session holding no role')
+
+    def test_debrief_with_no_one_live_says_so_and_fails(self):
+        self.kid({'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'}, parent_id='gone-0008', parent='old-parent')
+        self.add_log({'at': time.time(), 'dir': 'role', 'from': 'old-desk', 'fromId': 'gone-0009',
+                      'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'})
+        p = self.debrief(ok=False)
+        self.assertEqual(p.returncode, 1)
+        self.assertEqual(p.stdout, '')
+        self.assertIn('old-desk, the last desk for hire, is gone; old-parent, your parent, is gone', p.stderr)
+        self.assertIn("Put it in the area's files", p.stderr)
+
+    def test_debrief_from_a_session_that_is_not_a_sub_session_fails(self):
+        p = self.run_hive('debrief', ok=False, full=True)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn('not a sub-session', p.stderr)
+
+    def test_a_sub_sessions_list_names_the_role_lookup(self):
+        self.kid({'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'})
+        out = self.run_hive('peers', self_id='kid-0004')
+        self.assertIn('You are a sub-session of **work-aa**', out)
+        self.assertIn('to whoever holds the desk role for hire when you finish', out)
+        self.assertIn('one-line debrief', out)
 
 
     def test_a_refused_edit_reaches_a_holder_in_another_workspace(self):
