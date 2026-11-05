@@ -246,7 +246,89 @@ class Hive(unittest.TestCase):
         self.make_peer_a_child()
         r = self.spawn('deeper', who='peer-0002')
         self.assertEqual(r['action'], 'refused')
+        self.assertIn('cannot start their own unless they hold a desk role', r['reason'])
+
+    DESK_ROLE = ('--workspace', '/work/repo', '--area', 'hire', '--role', 'desk')
+
+    def children_file(self):
+        with open(os.path.join(self.home, '.claude', 'session-hive', 'children.json')) as f:
+            return json.load(f)
+
+    def test_a_sub_session_holding_a_desk_role_starts_its_own_one_level_down(self):
+        self.make_peer_a_child()
+        self.run_hive('role', *self.DESK_ROLE, self_id='peer-0002')
+        r = self.spawn('builder', who='peer-0002')
+        self.assertEqual(r['action'], 'started')
+        kid = [k for k in self.children_file() if k['name'] == 'builder'][0]
+        self.assertEqual((kid['parent'], kid['parentId']), ('work-bb', 'peer-0002'), "the successor's children are its own")
+        self.assertEqual(kid['route'], {'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'})
+        header = self.spawns()[0]['argv'][4].split('## Brief')[0]
+        self.assertIn('You cannot start sub-sessions of your own.', header, 'still one level of children per Desk')
+
+    def test_a_desk_roles_child_still_cannot_start_its_own(self):
+        self.make_peer_a_child()
+        self.run_hive('role', *self.DESK_ROLE, self_id='peer-0002')
+        self.spawn('builder', who='peer-0002')
+        p = subprocess.Popen(['sleep', '60'])
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        self.register(p.pid, 'kid-0005', 'builder', '/work/repo')
+        r = self.spawn('deeper', who='kid-0005')
+        self.assertEqual(r['action'], 'refused')
         self.assertIn('cannot start their own', r['reason'])
+
+    def test_a_role_other_than_desk_does_not_lift_the_limit(self):
+        self.make_peer_a_child()
+        self.run_hive('role', '--workspace', '/work/repo', '--area', 'runner', '--role', 'builder', self_id='peer-0002')
+        self.assertEqual(self.spawn('deeper', who='peer-0002')['action'], 'refused')
+
+    def test_a_desk_role_handed_on_takes_the_lift_with_it(self):
+        self.make_peer_a_child()
+        self.run_hive('role', *self.DESK_ROLE, self_id='peer-0002')
+        self.run_hive('role', *self.DESK_ROLE)   # work-aa takes the desk back
+        self.assertEqual(self.spawn('deeper', who='peer-0002')['action'], 'refused')
+
+    def test_a_desk_starts_its_successor_who_takes_the_role_and_starts_its_own(self):
+        self.run_hive('role', *self.DESK_ROLE)
+        r = self.spawn('desk-next', '--successor', brief='Take over from the handoff block in open-items.md.')
+        self.assertEqual(r['action'], 'started')
+        header = self.spawns()[0]['argv'][4].split('## Brief')[0]
+        self.assertIn('the successor that work-aa started', header)
+        self.assertIn('take over its desk role for hire', header)
+        self.assertIn('role --workspace /work/repo --area hire --role desk', header)
+        self.assertIn('you owe it no debrief', header)
+        self.assertNotIn('Debrief from sub-session', header)
+        self.assertNotIn('cannot start sub-sessions', header)
+        kid = self.children_file()[0]
+        self.assertTrue(kid['successor'])
+        self.assertIn('work-aa started sub-session desk-next: successor: Take over', self.run_hive('log'))
+        # The successor comes up, sees it is one, takes the role, and can start builders of its own.
+        p = subprocess.Popen(['sleep', '60'])
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        self.register(p.pid, 'next-0006', 'desk-next', '/work/repo')
+        before = self.run_hive('peers', self_id='next-0006')
+        self.assertIn('You are the successor **work-aa** started for its desk role for hire', before)
+        self.assertNotIn('When your brief is done', before)
+        self.assertIn('successor of work-aa', self.run_hive('peers'))
+        self.assertEqual(self.spawn('too-soon', who='next-0006')['action'], 'refused', 'not before it takes the role')
+        self.run_hive('role', *self.DESK_ROLE, self_id='next-0006')
+        after = self.run_hive('peers', self_id='next-0006')
+        self.assertIn('you hold the desk role for hire: you owe it no debrief', after)
+        self.assertEqual(self.spawn('runner-builder', who='next-0006')['action'], 'started')
+        self.assertEqual(self.spawn('desk-after', '--successor', who='next-0006')['action'], 'started')
+        self.assertEqual(self.spawn('more', who='me-0001')['action'], 'started', 'the old Desk is not a sub-session')
+
+    def test_only_a_desk_holder_starts_a_successor(self):
+        r = self.spawn('desk-next', '--successor')
+        self.assertEqual(r['action'], 'refused')
+        self.assertIn('holds no desk role', r['reason'])
+        self.assertEqual(self.spawns(), [])
+
+    def test_a_successor_or_a_desk_holder_owes_no_debrief(self):
+        self.kid({'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'})
+        self.run_hive('role', *self.DESK_ROLE, self_id='kid-0004')
+        p = self.debrief(ok=False)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn('kid-cc holds the desk role for hire, so it owes work-aa no debrief', p.stderr)
 
     def test_unattended_only_while_away_and_two_per_stretch_away(self):
         self.assertIn('not away', self.spawn('a', '--unattended')['reason'])
