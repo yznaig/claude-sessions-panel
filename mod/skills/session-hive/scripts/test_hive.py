@@ -316,6 +316,67 @@ class Hive(unittest.TestCase):
         self.assertEqual(self.spawn('runner-builder', who='next-0006')['action'], 'started')
         self.assertEqual(self.spawn('desk-after', '--successor', who='next-0006')['action'], 'started')
         self.assertEqual(self.spawn('more', who='me-0001')['action'], 'started', 'the old Desk is not a sub-session')
+        # The next successor takes the role; the one before it is not told to take it back.
+        q = subprocess.Popen(['sleep', '60'])
+        self.addCleanup(lambda: (q.kill(), q.wait()))
+        self.register(q.pid, 'after-0007', 'desk-after', '/work/repo')
+        took = self.run_hive('role', *self.DESK_ROLE, self_id='after-0007', full=True)
+        self.assertEqual(took.stderr, '', 'the planned handoff does not warn that the old Desk is still live')
+        handed = self.run_hive('peers', self_id='next-0006')
+        self.assertIn('have handed its desk role for hire on to desk-after: leave the role there', handed)
+        self.assertNotIn('Take it first', handed)
+        self.assertEqual(self.spawn('late', who='next-0006')['action'], 'refused', 'the lift went with the role')
+        self.assertIn('you hold the desk role for hire', self.run_hive('peers', self_id='after-0007'))
+
+    def test_taking_a_role_from_a_live_holder_still_warns_outside_a_planned_handoff(self):
+        self.run_hive('role', *self.DESK_ROLE)
+        p = self.run_hive('role', *self.DESK_ROLE, self_id='peer-0002', full=True)
+        self.assertIn('work-aa holds desk for hire and is still live', p.stderr)
+
+    def test_a_successor_taking_another_of_its_parents_roles_is_still_warned(self):
+        self.run_hive('role', *self.DESK_ROLE)
+        builder = ('--workspace', '/work/repo', '--area', 'runner', '--role', 'builder')
+        self.run_hive('role', *builder)
+        self.spawn('desk-next', '--successor')
+        p = subprocess.Popen(['sleep', '60'])
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        self.register(p.pid, 'next-0006', 'desk-next', '/work/repo')
+        self.assertIn('is still live', self.run_hive('role', *builder, self_id='next-0006', full=True).stderr)
+        self.assertEqual(self.run_hive('role', *self.DESK_ROLE, self_id='next-0006', full=True).stderr, '')
+
+    def test_the_successors_role_command_is_quoted(self):
+        self.run_hive('role', '--workspace', '/work/my repo', '--area', 'schema healing', '--role', 'Desk')
+        self.assertEqual(self.spawn('desk-next', '--successor')['action'], 'started', 'the desk role in any case')
+        header = self.spawns()[0]['argv'][4]
+        self.assertIn("role --workspace '/work/my repo' --area 'schema healing' --role Desk`", header)
+
+    def test_an_unattended_successor_reads_as_one(self):
+        self.set_away()
+        self.run_hive('role', *self.DESK_ROLE)
+        self.spawn('desk-next', '--successor', '--unattended')
+        header = self.spawns()[0]['argv'][4].split('## Brief')[0]
+        self.assertIn('to take over its desk role for hire, while the user is away, without their yes: carry on only '
+                      'with the work the user already approved for this role', header)
+        self.assertNotIn("your parent's run", header)
+
+    def test_a_successor_that_has_not_taken_the_role_owes_no_debrief(self):
+        self.kid({'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'})
+        with open(os.path.join(self.home, '.claude', 'session-hive', 'children.json')) as f:
+            kids = json.load(f)
+        kids[0]['successor'] = True
+        with open(os.path.join(self.home, '.claude', 'session-hive', 'children.json'), 'w') as f:
+            json.dump(kids, f)
+        p = self.debrief(ok=False)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("kid-cc is work-aa's successor, so it owes work-aa no debrief", p.stderr)
+
+    def test_a_keep_going_note_to_a_long_desk_that_is_a_sub_session_starts_one(self):
+        self.make_peer_a_child()
+        self.run_hive('role', *self.DESK_ROLE, self_id='peer-0002')
+        self.set_away()
+        v = json.loads(self.run_hive('receive', '--from', 'work-aa', '--tokens', '450000', self_id='peer-0002',
+                                     stdin='[keep going] the lanes stopped at the reset'))
+        self.assertIn('started work-bb-cont', v['reason'])
 
     def test_only_a_desk_holder_starts_a_successor(self):
         r = self.spawn('desk-next', '--successor')

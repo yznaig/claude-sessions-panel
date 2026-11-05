@@ -289,12 +289,18 @@ def cmd_peers(a):
             out.append(f"{parent.get('parent')} started you, and you hold the {desk.get('role')} role for "
                        f"{desk.get('area')}: you owe it no debrief, and you may start sub-sessions of your own, one "
                        "level deep, and a successor (`spawn --successor`) when your turn comes.")
-        elif parent and parent.get('successor'):
-            r = parent.get('route') or {}
-            out.append(f"You are the successor **{parent.get('parent')}** started for its {r.get('role')} role for "
-                       f"{r.get('area')}. Take it first: `python3 -I {os.path.abspath(__file__)} role --workspace "
-                       f"{r.get('workspace')} --area {r.get('area')} --role {r.get('role')}`; you owe "
-                       f"{parent.get('parent')} no debrief.")
+        elif parent and parent.get('successor') and all((parent.get('route') or {}).get(k)
+                                                        for k in ('workspace', 'area', 'role')):
+            r = parent['route']
+            if took_role(me.get('sessionId'), r, parent.get('at', 0)):
+                held = role_holder(argparse.Namespace(**r))
+                out.append(f"You were **{parent.get('parent')}**'s successor and have handed its {r.get('role')} "
+                           f"role for {r.get('area')} on to {(held or {}).get('from', 'another session')}: leave the "
+                           f"role there, and you owe no debrief.")
+            else:
+                out.append(f"You are the successor **{parent.get('parent')}** started for its {r.get('role')} role "
+                           f"for {r.get('area')}. Take it first: `{role_command(r)}`; you owe "
+                           f"{parent.get('parent')} no debrief.")
         elif parent:
             out.append(f"You are a sub-session of **{parent.get('parent')}**. When your brief is done, "
                        + debrief_ask(me.get('name'), parent.get('parent'), parent.get('route'), os.path.abspath(__file__))
@@ -528,6 +534,21 @@ def desk_role(held):
     return next((r for r in held if (r.get('role') or '').lower() == DESK_ROLE), None)
 
 
+def took_role(session_id, route, since):
+    """Whether this session wrote a record for that role at or after `since` (it may have handed it on since)."""
+    ws, area, role = route.get('workspace'), (route.get('area') or '').lower(), (route.get('role') or '').lower()
+    return any(r.get('dir') == 'role' and r.get('fromId') == session_id and r.get('workspace') == ws
+               and (r.get('area') or '').lower() == area and (r.get('role') or '').lower() == role
+               and r.get('at', 0) >= since for r in read_lines(LOG))
+
+
+def role_command(route):
+    """The `role` command that takes this role, quoted so it runs as given."""
+    import shlex
+    return ' '.join(shlex.quote(x) for x in ['python3', '-I', os.path.abspath(__file__), 'role', '--workspace',
+                                             route['workspace'], '--area', route['area'], '--role', route['role']])
+
+
 def start_child(me, name, brief, unattended=False, successor=False):
     """Start a sub-session of `me` in the background. Returns {"action": "started", "name", "id"} or
     {"action": "refused", "reason"}. One level deep, except that a session holding a desk role may start its
@@ -564,10 +585,11 @@ def start_child(me, name, brief, unattended=False, successor=False):
                "for your parent's run; take on no new job" if unattended else "with the user's yes")
         script = os.path.abspath(__file__)
         if successor:
-            header = (f"You are **{name}**, the successor that {my_name} started {how}, to take over its "
-                      f"{route['role']} role for {route['area']}.\n"
-                      f"First take the role: `python3 -I {script} role --workspace {route['workspace']} "
-                      f"--area {route['area']} --role {route['role']}`. {my_name} then hands off to you and stops; "
+            how = ("while the user is away, without their yes: carry on only with the work the user already "
+                   "approved for this role; take on no new job" if unattended else "with the user's yes")
+            header = (f"You are **{name}**, the successor that {my_name} started to take over its "
+                      f"{route['role']} role for {route['area']}, {how}.\n"
+                      f"First take the role: `{role_command(route)}`. {my_name} then hands off to you and stops; "
                       "you owe it no debrief. Holding the role, you may start sub-sessions of your own, one level "
                       "deep, and a successor of your own when your turn comes.\n\n## Brief\n\n")
         else:
@@ -575,6 +597,7 @@ def start_child(me, name, brief, unattended=False, successor=False):
                       "When the brief below is done, " + debrief_ask(name, my_name, route, script)
                       + ". Then tell the user it is done and offer to close. "
                       "You cannot start sub-sessions of your own.\n\n## Brief\n\n")
+        started = time.time()   # before the launch: a successor can take its role before `claude --bg` returns
         try:
             cwd = me.get('cwd') if os.path.isdir(me.get('cwd') or '') else os.getcwd()
             p = subprocess.run([CLAUDE, '--bg', '-n', name, '--', header + brief], cwd=cwd,
@@ -586,7 +609,7 @@ def start_child(me, name, brief, unattended=False, successor=False):
         if p.returncode != 0 or not m:
             return {'action': 'refused', 'reason': 'claude --bg did not start: ' + short(said, 200)}
         kids.append({'name': name, 'bgId': m.group(1), 'parent': my_name, 'parentId': me.get('sessionId'),
-                     'unattended': unattended, 'at': time.time(), 'cwd': me.get('cwd'), 'route': route,
+                     'unattended': unattended, 'at': started, 'cwd': me.get('cwd'), 'route': route,
                      'successor': successor})
         tmp = CHILDREN + '.tmp'
         with open(tmp, 'w') as f:
@@ -702,7 +725,13 @@ def live_ids():
 def cmd_role(a):
     me = writer(a)
     held = role_holder(a)
-    if held and held.get('fromId') != me.get('sessionId') and held.get('fromId') in live_ids():
+    kid = parent_of(me.get('name')) or {}
+    route = kid.get('route') or {}
+    handed = (kid.get('successor') and held and kid.get('parentId') == held.get('fromId')   # the planned handoff
+              and route.get('workspace') == held.get('workspace')
+              and (route.get('area') or '').lower() == (held.get('area') or '').lower()
+              and (route.get('role') or '').lower() == (held.get('role') or '').lower())
+    if held and not handed and held.get('fromId') != me.get('sessionId') and held.get('fromId') in live_ids():
         # A session with one turn and no handoff can be working through subagents (2026-10-30: a Desk
         # replaced runner-builder-8 mid-landing on that premise). Warn, still record: two holders may be meant.
         print(f"hive.py: {held.get('from')} holds {a.role} for {a.area} and is still live. A quiet session may be "
