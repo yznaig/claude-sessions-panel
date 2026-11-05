@@ -57,10 +57,13 @@ function discover(home = os.homedir()) {
 
 const CLAUDE_PLANS = { max: 'Max', pro: 'Pro', team: 'Team', enterprise: 'Enterprise', free: 'Free' };
 
-function claudePlan(creds) {
+// The tier comes from the profile Claude Code keeps in .claude.json when it has one: the sign-in
+// file's copy is written at login and stays on the old tier after a plan change.
+function claudePlan(creds, profile) {
   const o = (creds && creds.claudeAiOauth) || {};
+  const p = profile || {};
   const plan = CLAUDE_PLANS[o.subscriptionType] || o.subscriptionType || '';
-  const tier = /max_(\d+x)/.exec(o.rateLimitTier || '');
+  const tier = /max_(\d+x)/.exec(p.userRateLimitTier || p.organizationRateLimitTier || o.rateLimitTier || '');
   return plan === 'Max' && tier ? `Max ${tier[1]}` : plan;
 }
 
@@ -127,16 +130,17 @@ function getJson(url, headers) {
   });
 }
 
-function claudeEmail(acct) {
+function claudeProfile(acct) {
   const file = acct.isDefault ? path.join(os.homedir(), '.claude.json') : path.join(acct.dir, '.claude.json');
   const d = readJson(file);
-  return (d && d.oauthAccount && d.oauthAccount.emailAddress) || '';
+  return (d && d.oauthAccount) || {};
 }
 
 async function readClaude(acct) {
   const creds = readJson(path.join(acct.dir, '.credentials.json'));
   const o = creds && creds.claudeAiOauth;
-  const base = { plan: claudePlan(creds), email: claudeEmail(acct) };
+  const profile = claudeProfile(acct);
+  const base = { plan: claudePlan(creds, profile), email: profile.emailAddress || '' };
   if (!o || !o.accessToken) return { ...base, state: 'error', error: 'No login in .credentials.json' };
   if (o.expiresAt && o.expiresAt < Date.now()) return { ...base, state: 'asleep' };
   const r = await getJson(CLAUDE_URL, { Authorization: `Bearer ${o.accessToken}`, 'anthropic-beta': 'oauth-2025-04-20', 'User-Agent': 'claude-sessions-panel' });

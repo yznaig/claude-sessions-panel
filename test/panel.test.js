@@ -1077,6 +1077,15 @@ test('usage: a 429 reads as rate limited, not failed, for Claude and Codex login
   } finally { https.get = get; fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('usage: the plan tier follows the profile in .claude.json, not the stale sign-in copy', () => {
+  const usage = require('../usage');
+  const creds = { claudeAiOauth: { subscriptionType: 'max', rateLimitTier: 'default_claude_max_5x' } };
+  eq(usage.claudePlan(creds), 'Max 5x');
+  eq(usage.claudePlan(creds, {}), 'Max 5x');
+  eq(usage.claudePlan(creds, { organizationRateLimitTier: 'default_claude_max_20x', userRateLimitTier: null }), 'Max 20x');
+  eq(usage.claudePlan({ claudeAiOauth: { subscriptionType: 'pro' } }, { organizationRateLimitTier: 'default_claude_pro' }), 'Pro');
+});
+
 // ---- put to sleep from the menu --------------------------------------------------
 
 withHarness('put to sleep: stops an idle session at once; it stays where it is, asleep, through a restart', async h => {

@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.23.1 — 2026-11-04
+**The Usage view names the plan you're on now.** A Claude card's plan (Max 5x, Max 20x) came from the sign-in file, which keeps the tier from the day you logged in, so after the default account moved to Max 20x it still said Max 5x. The tier now comes from the account profile Claude Code refreshes in `.claude.json` (the user's own tier first, then the organization's), with the sign-in file as the fallback. Percentages and resets were already read live; no limits are hard-coded.
+
 ## session-trail 0.7.0 (companion mod) — 2026-11-04
 **Debriefs reach whoever holds the role now, in one line.** A sub-session started by a session holding a hive role (the Desk) is told to debrief whoever holds that role when it finishes, not the session that started it: `hive.py debrief` names them, by their current name, and falls back to the parent when no live session holds the role. On 2026-11-03 three debriefs went to a Desk that had already handed off. The spawn header now asks for one line (what is done and where, plus any question for the user word for word), details in the area's files; the median debrief that night was 1.8 KB. `hive.py who` gives a renamed holder's current name: `Desk (live, took the role as <its earlier name>)`.
 
