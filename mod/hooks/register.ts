@@ -134,6 +134,16 @@ async function watchForSubSession($: EngineInterface): Promise<void> {
   })
 }
 
+// A background session the Claude Sessions panel brought into VS Code while it watched a command:
+// the stop that freed it ended the command. The panel left a note; the session gets it as its next
+// prompt (framed as this plugin's, not the person's) and can start the command again.
+async function tellWhatWasCutOff($: EngineInterface): Promise<void> {
+  const home = await $.env.get('HOME')
+  if (!(await $.fs.exists(`${home}/.claude/session-hive/resume/${await $.session.id()}.json`))) return
+  const note = (await hive($, ['resumed'])).trim()
+  if (note) void $.prompt.submit({ text: note })
+}
+
 export const register: Register = on => {
   on('prompt.context', async ($, e, next) => {
     const r = await next(e)
@@ -215,7 +225,10 @@ export const register: Register = on => {
     const r = await next(e)
     if (await vscodeShows($)) await write($, true).catch(() => {})
     // VS Code starts its sessions with isInteractive false, so the entrypoint is the test.
-    if (entrypoint === 'claude-vscode') await watchForSubSession($).catch(() => {})
+    if (entrypoint === 'claude-vscode') {
+      await watchForSubSession($).catch(() => {})
+      await tellWhatWasCutOff($).catch(err => $.ui.log(`session hive: resume note not read (${err})`, { to: 'debug' }))
+    }
     return r
   })
 

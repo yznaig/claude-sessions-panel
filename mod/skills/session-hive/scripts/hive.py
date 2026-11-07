@@ -13,6 +13,9 @@
                                   per away; --successor (desk holders) starts the session that takes the role.
                                   It opens as a Claude Code tab when a Claude Sessions panel has this folder
                                   open, else in the background (`claude --bg`)
+  resumed                         for a session just opened in VS Code: the note the Claude Sessions panel left
+                                  when it stopped the session's background watch to bring it in (once; empty
+                                  when there is none)
   pickup --token T                for a new VS Code session: take the sub-session request its prompt box was
                                   opened with; prints {"action": "submit", "text"} or {"action": "none"}
   log    [--hours N]              the message log, newest last
@@ -57,6 +60,8 @@ CHILDREN = os.path.join(HIVE, 'children.json')
 DESK_ROLE = 'desk'           # a session holding this role may start sub-sessions even when it is one itself
 UNATTENDED_LIMIT = 2         # sub-sessions one session may start without the user's yes, per stretch away
 CLAUDE = os.environ.get('HIVE_CLAUDE', 'claude')
+RESUME = os.path.join(HIVE, 'resume')     # <session id>.json: a watch the panel cut off to open the session here
+RESUME_FRESH_SECONDS = 3600                # an older note is about some earlier opening
 SPAWNS = os.path.join(HIVE, 'spawn')      # <token>.json: a sub-session waiting for a panel to open its tab
 PANELS = os.path.join(HIVE, 'panels')     # <pid>.json: a live Claude Sessions panel and its window's folders
 TAB_CLAIM_SECONDS = float(os.environ.get('HIVE_TAB_CLAIM_SECONDS', 8))     # for a panel to open the tab
@@ -796,6 +801,32 @@ def prune_spawns(days=2):
             pass
 
 
+def cmd_resumed(a):
+    """Prints the note for this session once, then moves it aside; prints nothing when there is none."""
+    me = find_self(registry(), a.self) or {}
+    sid = me.get('sessionId') or a.self or ''
+    if not re.fullmatch(r'[0-9A-Za-z-]{1,64}', sid):
+        return 0
+    path = os.path.join(RESUME, sid + '.json')
+    try:
+        os.rename(path, path + '.read')
+    except FileNotFoundError:
+        return 0
+    try:
+        with open(path + '.read') as f:
+            note = json.load(f)
+    except (OSError, ValueError):
+        return 0
+    if time.time() - (note.get('at') or 0) > RESUME_FRESH_SECONDS:
+        return 0
+    what = note.get('watching') or 'a background command'
+    print(f"[session hive] The user opened this session in VS Code while it was watching a background command "
+          f"({what}). Bringing it in from the background stopped that command, so its result will not arrive. "
+          "If you still need it, start it again now; otherwise carry on. This note is from the Claude Sessions "
+          "panel, not the user.")
+    return 0
+
+
 def cmd_pickup(a):
     """The new session's half: take the request <token>.opening, answer with its prompt to submit."""
     if not re.fullmatch(r'[0-9a-f]{8,32}', a.token or ''):
@@ -1092,6 +1123,7 @@ def main():
     p = sub.add_parser('spawn'); p.add_argument('--name', required=True); p.add_argument('--unattended', action='store_true')
     p.add_argument('--successor', action='store_true', help="the new session takes over this session's desk role")
     p = sub.add_parser('pickup'); p.add_argument('--token', required=True)
+    sub.add_parser('resumed')
     p = sub.add_parser('log'); p.add_argument('--hours', type=float, default=24)
     p = sub.add_parser('decide'); p.add_argument('--workspace', required=True); p.add_argument('--area', required=True)
     p.add_argument('text', nargs='+')
@@ -1103,7 +1135,7 @@ def main():
     p = sub.add_parser('since'); p.add_argument('--cwd'); p.add_argument('--take', action='store_true')
     a = ap.parse_args()
     return {'peers': cmd_peers, 'receive': cmd_receive, 'held': cmd_held, 'sent': cmd_sent, 'claim': cmd_claim,
-            'spawn': cmd_spawn, 'pickup': cmd_pickup, 'log': cmd_log, 'decide': cmd_decide, 'role': cmd_role, 'who': cmd_who, 'debrief': cmd_debrief,
+            'spawn': cmd_spawn, 'pickup': cmd_pickup, 'resumed': cmd_resumed, 'log': cmd_log, 'decide': cmd_decide, 'role': cmd_role, 'who': cmd_who, 'debrief': cmd_debrief,
             'note': cmd_note, 'since': cmd_since}[a.cmd](a)
 
 

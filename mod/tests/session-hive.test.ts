@@ -262,3 +262,32 @@ test('when the brief cannot be sent, it is left in the box for the person', asyn
   await clock.advance(500)
   expect(fills).toEqual(['You are **notice-drafts**…\n\n## Brief\n\nDig in.'])
 })
+
+// A watching background session brought into VS Code: the panel left a note for it.
+
+test('a session brought into VS Code mid-watch is told what was cut off, as the plugin', async ($, on) => {
+  const note = '[session hive] The user opened this session in VS Code while it was watching a background command (Poll deploy).'
+  const w = world(on, argv => ({ stdout: sub(argv) === 'resumed' ? note + '\n' : '' }))
+  const clock = mock.clock(on)
+  mock.env(on, { CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', HOME: '/home/me' })
+  on('session.surfaces', () => ({ value: [] }))
+  on('session.turns', () => ({ value: 12 }))
+  on('fs.exists', (_: unknown, e: { path: string }) => ({ value: e.path === '/home/me/.claude/session-hive/resume/s1.json' }))
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/work/repo', surface: null, isInteractive: false })
+  await clock.settle()
+  expect(w.calls.filter(c => sub(c.argv) === 'resumed').length).toBe(1)
+  expect(w.submitted.map(s => s.text)).toEqual([note])
+})
+
+test('a VS Code session with no note left for it asks nothing', async ($, on) => {
+  const w = world(on, () => ({ stdout: '' }))
+  mock.env(on, { CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', HOME: '/home/me' })
+  on('session.surfaces', () => ({ value: [] }))
+  on('session.turns', () => ({ value: 12 }))
+  on('fs.exists', () => ({ value: false }))
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/work/repo', surface: null, isInteractive: false })
+  expect(w.calls.filter(c => sub(c.argv) === 'resumed')).toEqual([])
+  expect(w.submitted).toEqual([])
+})

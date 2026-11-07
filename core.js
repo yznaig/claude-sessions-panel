@@ -347,15 +347,18 @@ class Provider {
 
   // A session started with `claude --bg` (a hive sub-session) is held by its background process, so
   // VS Code would say it is "still open somewhere else". Done with its turn, it is stopped there with
-  // `claude stop` (the conversation is kept; a plain kill gets it restarted) and opens here. Still
-  // working or waiting on an answer, it is left alone. Returns whether to go on and open it.
+  // `claude stop` (the conversation is kept; a plain kill gets it restarted) and opens here. Watching
+  // a background command (Claude Code's "shell"), it is handed over too: the stop ends the command, so
+  // a note left for the session (spawns.js leaveResumeNote) tells it, as it opens here, what was cut
+  // off. Still working or waiting on an answer, it is left alone. Returns whether to go on and open it.
   async handOver(id) {
     const reg = this.list.reg(id);
     if (!reg || reg.kind !== 'bg') return true;
     const job = reg.jobId || String(reg.sessionId).slice(0, 8);
     const name = displayName(reg);
     const status = reg.status || 'idle';
-    if (status !== 'idle') {
+    const watching = status === 'shell' || status === 'watching'; // the list calls Claude Code's "shell" watching
+    if (status !== 'idle' && !watching) {
       const pick = await vscode.window.showInformationMessage(
         `"${name}" is ${status === 'busy' ? 'still working' : status === 'watching' ? 'watching a background command' : 'waiting for an answer'} in the background. Watch it in a terminal, or click it again once it's done.`,
         'Watch in terminal');
@@ -366,7 +369,14 @@ class Provider {
       }
       return false;
     }
-    vscode.window.setStatusBarMessage(`Claude Sessions: bringing "${name}" in from the background…`, 4000);
+    let dropNote = () => {};
+    if (watching) {
+      const what = transcripts.watchingFor(reg);
+      dropNote = spawns.leaveResumeNote(os.homedir(), reg.sessionId, what);
+      vscode.window.setStatusBarMessage(`Claude Sessions: bringing "${name}" in; its watch${what ? ` (${what})` : ''} stops, and it will be told so it can start it again…`, 6000);
+    } else {
+      vscode.window.setStatusBarMessage(`Claude Sessions: bringing "${name}" in from the background…`, 4000);
+    }
     const stopped = await new Promise(resolve => {
       try {
         const child = require('child_process').execFile(claudeCommand(), ['stop', job], { cwd: reg.cwd || os.homedir(), timeout: 30e3 },
@@ -376,6 +386,7 @@ class Provider {
     });
     for (let i = 0; stopped && i < 40 && pidAlive(reg); i++) await new Promise(r => setTimeout(r, 200));
     if (!stopped || pidAlive(reg)) {
+      dropNote();
       vscode.window.showInformationMessage(`Claude Sessions: couldn't stop "${name}" in the background, so it wasn't opened here (it would say it is open somewhere else). Try "claude stop ${job}" in a terminal.`);
       return false;
     }
@@ -697,8 +708,13 @@ function start(host) {
   // and opens each request for its first folder, the folder a new tab's session starts in.
   const folders = () => (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath);
   let unannounce = () => {};
-  const announce = () => { unannounce(); unannounce = spawns.announcePanel(os.homedir(), process.pid, procs.procStartOf(process.pid), folders()); };
+  const tabsOn = () => cfg().get('subSessionTabs') === true;
+  const announce = () => {
+    unannounce(); unannounce = () => {};
+    if (tabsOn()) unannounce = spawns.announcePanel(os.homedir(), process.pid, procs.procStartOf(process.pid), folders());
+  };
   const openRequested = () => {
+    if (!tabsOn()) return;
     for (const req of spawns.takeRequests(os.homedir(), folders(), Date.now())) {
       Promise.resolve(vscode.commands.executeCommand(OPEN_COMMAND, undefined, spawns.tagText(req), undefined, undefined, undefined, { programmatic: 'pin-to-panel' }))
         .catch(err => vscode.window.showWarningMessage(`Claude Sessions: couldn't open a tab for sub-session "${req.name}": ${err && err.message || err}. It will start in the background instead.`));
@@ -711,6 +727,7 @@ function start(host) {
   const spawnPoll = setInterval(openRequested, 1000); // a missed watch event costs a second, not the tab
   openRequested();
   subs.push(vscode.workspace.onDidChangeWorkspaceFolders(announce));
+  subs.push(vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('claudeSessions.subSessionTabs')) announce(); }));
   subs.push({ dispose: () => { if (spawnWatcher) spawnWatcher.close(); clearInterval(spawnPoll); unannounce(); } });
   subs.push(vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('claudeSessions')) tick(); }));
 

@@ -1249,6 +1249,7 @@ withHarness('spawn: a request for this window\'s folder opens a tab with its tag
   const dir = spawnRequest(h, 'aaaa1111bbbb2222');
   spawnRequest(h, 'cccc3333dddd4444', { cwd: '/some/other/repo' });
   spawnRequest(h, 'eeee5555ffff6666', { at: h.now / 1000 - 120 });
+  h.config.subSessionTabs = true;
   h.start();
   const opened = h.executed.filter(a => a[0] === 'claude-vscode.editor.open');
   eq(opened.length, 1, 'only the fresh request for this folder');
@@ -1260,9 +1261,49 @@ withHarness('spawn: a request for this window\'s folder opens a tab with its tag
 
 withHarness('spawn: the panel says which folders its window has open while it runs', async h => {
   const file = path.join(h.home, '.claude', 'session-hive', 'panels', `${process.pid}.json`);
+  h.config.subSessionTabs = true;
   h.start();
   const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
   same(rec.folders, [h.proj]); eq(rec.pid, process.pid); assert.ok(rec.procStart);
   h.stop();
   assert.ok(!fs.existsSync(file), 'gone when the panel stops');
+});
+
+withHarness('spawn: with tabs off (the default) the panel neither announces itself nor opens requests', async h => {
+  const dir = spawnRequest(h, 'aaaa1111bbbb2222');
+  h.start();
+  eq(h.executed.filter(a => a[0] === 'claude-vscode.editor.open').length, 0);
+  same(fs.readdirSync(dir), ['aaaa1111bbbb2222.json'], 'left for spawn to withdraw');
+  assert.ok(!fs.existsSync(path.join(h.home, '.claude', 'session-hive', 'panels', `${process.pid}.json`)));
+});
+
+// ---- a background session watching a command: handed over too, and told what was cut off ----
+
+withHarness('a background session watching a command: a click stops it, opens it here, and leaves it a note', async h => {
+  const a = h.session('a', { bg: true, status: 'busy', transcript: [L.user('merge it'), L.background('t1', 'Poll deploy for d98af1fd'), L.started('t1')] });
+  h.start();
+  a.set('shell'); h.step();
+  eq(h.row('a').status, 'watching');
+  await h.send({ type: 'focus', id: a.id });
+  assert.ok(!a.alive(), 'stopped in the background');
+  eq(h.executed.at(-1)[0], 'claude-vscode.editor.open'); eq(h.executed.at(-1)[1], a.id);
+  const note = JSON.parse(fs.readFileSync(path.join(h.home, '.claude', 'session-hive', 'resume', a.id + '.json'), 'utf8'));
+  eq(note.watching, 'Poll deploy for d98af1fd');
+});
+
+withHarness('a watching background session that will not stop is not opened, and no note is left', async h => {
+  h.bgStopWorks = false;
+  const a = h.session('a', { bg: true, status: 'shell' });
+  h.start();
+  const before = h.executed.length;
+  await h.send({ type: 'focus', id: a.id });
+  assert.ok(a.alive()); eq(h.executed.length, before);
+  assert.ok(!fs.existsSync(path.join(h.home, '.claude', 'session-hive', 'resume', a.id + '.json')));
+});
+
+withHarness('a background session that is done opens with no note', async h => {
+  const a = h.session('a', { bg: true });
+  h.start();
+  await h.send({ type: 'focus', id: a.id });
+  assert.ok(!fs.existsSync(path.join(h.home, '.claude', 'session-hive', 'resume', a.id + '.json')));
 });

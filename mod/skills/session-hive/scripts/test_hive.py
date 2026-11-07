@@ -373,6 +373,31 @@ class Hive(unittest.TestCase):
         return json.loads(self.run_hive('spawn', '--name', name, stdin='Dig into the delay-notice drafts.', ok=False,
                                         env_extra={'HIVE_TAB_CLAIM_SECONDS': '1', 'HIVE_TAB_PICKUP_SECONDS': '1'}))
 
+    # --- a watching background session opened in VS Code ---
+
+    def resume_note(self, sid, watching='Poll deploy for d98af1fd', age=0):
+        d = os.path.join(self.home, '.claude', 'session-hive', 'resume')
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, sid + '.json'), 'w') as f:
+            json.dump({'at': time.time() - age, 'watching': watching}, f)
+
+    def test_a_session_opened_mid_watch_is_told_once_what_was_cut_off(self):
+        self.resume_note('me-0001')
+        said = self.run_hive('resumed')
+        self.assertIn('Poll deploy for d98af1fd', said)
+        self.assertIn('start it again', said)
+        self.assertEqual(self.run_hive('resumed'), '', 'once')
+
+    def test_no_note_and_a_stale_note_say_nothing(self):
+        self.assertEqual(self.run_hive('resumed'), '')
+        self.resume_note('me-0001', age=7200)
+        self.assertEqual(self.run_hive('resumed'), '')
+
+    def test_another_sessions_note_is_left_for_it(self):
+        self.resume_note('peer-0002')
+        self.assertEqual(self.run_hive('resumed'), '')
+        self.assertIn('Poll deploy', self.run_hive('resumed', self_id='peer-0002'))
+
     def make_peer_a_child(self):
         os.makedirs(os.path.join(self.home, '.claude', 'session-hive'), exist_ok=True)
         with open(os.path.join(self.home, '.claude', 'session-hive', 'children.json'), 'w') as f:
