@@ -200,10 +200,12 @@ test('a VS Code session keeps the hive', async ($, on) => {
 // A sub-session opened as a VS Code tab: the panel put "[hive:<token>]" in the new tab's box.
 
 function freshTab(on: any, box: { text: string }, opening = ['aaaa1111bbbb2222.opening']) {
-  const w = world(on, argv => ({ stdout: sub(argv) === 'pickup' ? JSON.stringify({ action: 'submit', text: 'You are **notice-drafts**…\n\n## Brief\n\nDig in.' }) : '' }))
+  const w = world(on, argv => ({ stdout: sub(argv) === 'pickup' ? JSON.stringify({ action: 'submit', name: 'notice-drafts', text: 'You are **notice-drafts**…\n\n## Brief\n\nDig in.' }) : '' }))
   const clock = mock.clock(on)
   mock.env(on, { CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', HOME: '/home/me' })
   const fills: string[] = []
+  const commands: string[] = []
+  on('command.run', (_: unknown, e: { command: string; args?: string }) => { commands.push(`/${e.command} ${e.args ?? ''}`.trim()); w.submitted.length && commands.push('AFTER SUBMIT'); return { text: '' } })
   on('session.surfaces', () => ({ value: [] }))
   on('session.turns', () => ({ value: 0 }))
   on('fs.exists', () => ({ value: true }))
@@ -211,12 +213,12 @@ function freshTab(on: any, box: { text: string }, opening = ['aaaa1111bbbb2222.o
   on('prompt.read', () => ({ value: { text: box.text, cursor: 0 } }))
   on('prompt.fill', (_: unknown, e: { text: string }) => { fills.push(e.text); box.text = e.text; return { isFilled: true, text: e.text } })
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
-  return { w, clock, fills }
+  return { w, clock, fills, commands }
 }
 
 test('a fresh VS Code tab opened with a hive tag takes its request and submits the brief as typed', async ($, on) => {
   const box = { text: '' }
-  const { w, clock, fills } = freshTab(on, box)
+  const { w, clock, fills, commands } = freshTab(on, box)
   await $.session.start({ cwd: '/work/repo', surface: null, isInteractive: false })
   await clock.advance(500)
   expect(w.calls.filter(c => sub(c.argv) === 'pickup')).toEqual([])
@@ -226,6 +228,7 @@ test('a fresh VS Code tab opened with a hive tag takes its request and submits t
   expect(pickups.length).toBe(1)
   expect(pickups[0]!.argv.join(' ')).toContain('pickup --token aaaa1111bbbb2222')
   expect(fills).toEqual([''])
+  expect(commands).toEqual(['/rename notice-drafts'], 'named before the brief is sent')
   expect(w.submitted.map(s => s.text)).toEqual(['You are **notice-drafts**…\n\n## Brief\n\nDig in.'])
   await clock.advance(5000)
   expect(w.calls.filter(c => sub(c.argv) === 'pickup').length).toBe(1)

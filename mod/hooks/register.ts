@@ -112,9 +112,15 @@ async function watchForSubSession($: EngineInterface): Promise<void> {
       }
       done = true
       timer.cancel()
-      const verdict = JSON.parse(await hive($, ['pickup', '--token', m[1]])) as { action: string; text?: string }
+      const verdict = JSON.parse(await hive($, ['pickup', '--token', m[1]])) as { action: string; name?: string; text?: string }
       if (verdict.action !== 'submit' || !verdict.text) return
       const brief = verdict.text
+      // Named first, while the session is idle: the tab and the session list show the sub-session's
+      // name, and messages reach it by that name.
+      if (verdict.name) {
+        await $.command.run({ command: 'rename', args: verdict.name })
+          .catch(err => $.ui.log(`session hive: sub-session not renamed (${err})`, { to: 'debug' }))
+      }
       try {
         await $.prompt.submit({ text: brief, asUser: true })
       } catch (err) {
