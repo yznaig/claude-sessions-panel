@@ -275,7 +275,8 @@ class Hive(unittest.TestCase):
         t, got = self.fake_panel()
         r = self.spawn('notice drafts')
         t.join()
-        self.assertEqual(r, {'action': 'started', 'name': 'notice-drafts', 'where': 'tab', 'id': 'tab-0009'})
+        self.assertEqual(r, {'action': 'started', 'name': 'notice-drafts', 'where': 'tab', 'id': 'tab-0009',
+                             'messageAs': 'repo-3'})
         self.assertEqual(self.spawns(), [], 'no background session')
         self.assertEqual(got[0]['action'], 'submit')
         self.assertIn("a sub-session that work-aa started with the user's yes", got[0]['text'])
@@ -284,7 +285,43 @@ class Hive(unittest.TestCase):
             kid = json.load(f)[-1]
         self.assertEqual((kid['name'], kid['sessionId'], kid.get('pending')), ('notice-drafts', 'tab-0009', None))
         debrief = self.run_hive('debrief', self_id='tab-0009', ok=False)
-        self.assertIn('work-aa', debrief, 'the tab session goes by its sub-session name, so it knows its parent')
+        self.assertIn('work-aa', debrief, 'found by its session id, so it knows its parent')
+        peers = self.run_hive('peers')
+        self.assertIn('**repo-3**', peers, 'listed by the name messages reach it by')
+        self.assertIn('sub-session notice-drafts of work-aa', peers)
+        mine = self.run_hive('peers', self_id='tab-0009')
+        self.assertIn('You are **repo-3**. Your sub-session name is notice-drafts', mine)
+        self.assertIn('Debrief from sub-session notice-drafts', mine)
+
+    def test_the_tab_session_knows_it_is_a_sub_session_as_soon_as_it_takes_the_brief(self):
+        self.tab_setup()
+        seen = {}
+        t, got = self.fake_panel()
+        orig = self.run_hive
+        def spy(*args, **kw):
+            out = orig(*args, **kw)
+            if args[:1] == ('pickup',):
+                seen['debrief'] = orig('debrief', self_id='tab-0009', ok=False)
+            return out
+        self.run_hive = spy
+        self.spawn_quick('notice drafts')
+        t.join()
+        self.assertIn('work-aa', seen['debrief'], 'before spawn itself has seen the pickup')
+
+    def test_a_spawn_interrupted_while_it_waits_leaves_no_request_and_no_entry(self):
+        import signal
+        self.tab_setup()
+        env = dict(os.environ, HOME=self.home, HIVE_CLAUDE=self.fake_claude())
+        p = subprocess.Popen([sys.executable, '-I', HIVE, '--self', 'me-0001', 'spawn', '--name', 'cut-short'],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        p.stdin.write('Brief.'); p.stdin.close()
+        end = time.time() + 5
+        while not (os.path.isdir(self.spawn_dir) and any(f.endswith('.json') for f in os.listdir(self.spawn_dir))):
+            self.assertLess(time.time(), end); time.sleep(0.05)
+        p.send_signal(signal.SIGINT); p.wait(10); p.stdout.close(); p.stderr.close()
+        self.assertEqual([f for f in os.listdir(self.spawn_dir) if f.endswith(('.json', '.opening'))], [])
+        with open(os.path.join(self.home, '.claude', 'session-hive', 'children.json')) as f:
+            self.assertEqual([k['name'] for k in json.load(f)], [], 'the name is free again')
 
     def test_a_second_pickup_of_the_same_request_gets_nothing(self):
         self.tab_setup()

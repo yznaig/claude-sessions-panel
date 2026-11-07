@@ -110,12 +110,6 @@ def registry():
         if started is None or (r.get('procStart') and str(r['procStart']) != started):
             continue
         out[pid] = r
-    # A sub-session started in a VS Code tab can't be named at launch: it goes by its sub-session name
-    # here unless someone has named it since.
-    named = {k['sessionId']: k['name'] for k in children() if k.get('sessionId') and k.get('name')}
-    for r in out.values():
-        if r.get('sessionId') in named and r.get('nameSource') not in ('user', 'peer'):
-            r['name'] = named[r['sessionId']]
     return out
 
 
@@ -178,9 +172,18 @@ def children():
         return []
 
 
-def parent_of(name):
+def parent_of(r):
+    """The children.json entry of a session (its registry record), or None when it isn't a sub-session.
+    Matched by session id: a tab sub-session keeps the name Claude Code gave it (messages reach it by that
+    name), and a background one's id starts with its bgId. A name alone matches entries that have no id."""
+    if isinstance(r, str):
+        r = {'name': r}
+    sid = r.get('sessionId') or ''
     for k in children():
-        if k.get('name') == name:
+        if sid and (k.get('sessionId') == sid or (k.get('bgId') and sid.startswith(k['bgId']))):
+            return k
+    for k in children():
+        if not k.get('sessionId') and r.get('name') and k.get('name') == r.get('name'):
             return k
     return None
 
@@ -264,9 +267,10 @@ def moved_out(log, now=None):
 def peer_line(r, d, parked, cwd, moved=()):
     name = r.get('name') or r.get('sessionId', '')[:8]
     bits = [r.get('status', 'idle'), f"{kilo(d['tokens'])} tokens"]
-    parent = parent_of(name)
+    parent = parent_of(r)
     if parent:
-        bits.append(f"{'successor' if parent.get('successor') else 'sub-session'} of {parent.get('parent')}")
+        called = f" {parent.get('name')}" if parent.get('name') != name else ''
+        bits.append(f"{'successor' if parent.get('successor') else 'sub-session'}{called} of {parent.get('parent')}")
     if r.get('sessionId') in parked:
         bits.append('parked: never message')
     elif d['tokens'] and d['tokens'] > TOKEN_LIMIT:
@@ -297,7 +301,10 @@ def cmd_peers(a):
     moved = moved_out(read_lines(LOG))
     if me:
         out.append(f"\nYou are **{me.get('name')}**.")
-        parent = parent_of(me.get('name'))
+        parent = parent_of(me)
+        if parent and parent.get('name') != me.get('name'):
+            out[-1] += (f" Your sub-session name is {parent.get('name')}; other sessions message you as "
+                        f"{me.get('name')}.")
         desk = desk_role(roles_of(me.get('sessionId'))) if parent else None
         if desk:
             out.append(f"{parent.get('parent')} started you, and you hold the {desk.get('role')} role for "
@@ -317,7 +324,7 @@ def cmd_peers(a):
                            f"{parent.get('parent')} no debrief.")
         elif parent:
             out.append(f"You are a sub-session of **{parent.get('parent')}**. When your brief is done, "
-                       + debrief_ask(me.get('name'), parent.get('parent'), parent.get('route'), os.path.abspath(__file__))
+                       + debrief_ask(parent.get('name') or me.get('name'), parent.get('parent'), parent.get('route'), os.path.abspath(__file__))
                        + ", then tell the user and offer to close.")
         for m in moved.get(me.get('name'), [])[-3:]:
             out.append(f'A thread moved out of this session: {short(m, 120)}. Leave it to the session holding it now.')
@@ -578,7 +585,7 @@ def start_child(me, name, brief, unattended=False, successor=False):
         kids = children()
         held = roles_of(me.get('sessionId'))
         desk = desk_role(held)
-        if any(k.get('name') == my_name for k in kids) and not desk:
+        if parent_of(me) and not desk:
             return {'action': 'refused', 'reason': f'{my_name} is itself a sub-session; sub-sessions cannot start their '
                     f'own unless they hold a {DESK_ROLE} role'}
         if successor and not desk:
@@ -626,12 +633,18 @@ def start_child(me, name, brief, unattended=False, successor=False):
                 return {'action': 'refused', 'reason': said}
             kid['bgId'] = bg_id
         save_children(kids + [kid])
-    where, note, the_id = 'background', None, kid.get('bgId')
+    where, note, the_id, message_as = 'background', None, kid.get('bgId'), None
     if tab:
-        session_id, note = open_tab(kid['token'], name, cwd, header + brief, my_name)
-        if session_id:
-            where, the_id = 'tab', session_id[:8]
-            update_child(kid['token'], sessionId=session_id, pending=None)
+        try:
+            took, session_id, note = open_tab(kid['token'], name, cwd, header + brief, my_name)
+        except BaseException:
+            if not withdraw(kid['token']):
+                update_child(kid['token'], remove=True)
+            raise
+        if took:
+            where, the_id = 'tab', (session_id or '')[:8] or None
+            update_child(kid['token'], pending=None, **({'sessionId': session_id} if session_id else {}))
+            message_as = next((r.get('name') for r in registry().values() if session_id and r.get('sessionId') == session_id), None)
         else:
             the_id, said = launch_bg(cwd, name, header + brief)
             if not the_id:
@@ -643,6 +656,8 @@ def start_child(me, name, brief, unattended=False, successor=False):
                  'first': ('unattended: ' if unattended else '') + ('successor: ' if successor else '')
                  + first_line(brief)})
     out = {'action': 'started', 'name': name, 'where': where, 'id': the_id}
+    if message_as and message_as != name:
+        out['messageAs'] = message_as   # the name Claude Code knows the tab by: SendMessage reaches it there
     if note:
         out['note'] = note
     return out
@@ -725,9 +740,10 @@ def wait_for(path, seconds):
 
 def open_tab(token, name, cwd, prompt, parent):
     """Ask the panel for a Claude Code tab, then wait for its session to take the prompt (`pickup`).
-    Returns (the new session's id, None), or (None, why) once the request is withdrawn, so a late panel
-    or session finds nothing to take. Files: <token>.json asked → .opening (a panel opened the tab) →
-    .taken (the session took it); .fallback or .withdrawn when it went to the background instead."""
+    Returns (True, the new session's id or None, None) once a tab's session took it, or (False, None, why)
+    once the request is withdrawn, so a late panel or session finds nothing to take. Files: <token>.json
+    asked → .opening (a panel opened the tab) → .taken (the session took it); .fallback or .withdrawn when
+    it went to the background instead. A request the withdraw can't catch is the tab's: never both."""
     os.makedirs(SPAWNS, exist_ok=True)
     prune_spawns()
     base = os.path.join(SPAWNS, token)
@@ -741,20 +757,33 @@ def open_tab(token, name, cwd, prompt, parent):
         time.sleep(0.2)
     try:
         os.rename(base + '.json', base + '.fallback')
-        return None, 'no Claude Sessions panel opened a tab'
+        return False, None, 'no Claude Sessions panel opened a tab'
     except FileNotFoundError:
         pass   # a panel took it
     if not wait_for(base + '.taken', TAB_PICKUP_SECONDS):
         try:
             os.rename(base + '.opening', base + '.withdrawn')
-            return None, 'a tab opened but its session never took the brief (close the tab)'
+            return False, None, 'a tab opened but its session never took the brief (close the tab)'
         except FileNotFoundError:
-            wait_for(base + '.taken', 5)   # taken this instant
+            wait_for(base + '.taken', 60)   # taken this instant: the tab has it, however long pickup takes
     try:
         with open(base + '.taken') as f:
-            return json.load(f)['sessionId'], None
-    except (OSError, ValueError, KeyError):
-        return None, 'the tab\'s session took the brief but left no session id'
+            return True, json.load(f).get('sessionId'), None
+    except (OSError, ValueError):
+        return True, None, "the tab's session took the brief but its id wasn't recorded yet"
+
+
+def withdraw(token):
+    """Take back an open request so no panel or session takes it later. True when a tab's session already
+    took it (it is the tab's now)."""
+    base = os.path.join(SPAWNS, token)
+    for a, b in (('.json', '.fallback'), ('.opening', '.withdrawn')):
+        try:
+            os.rename(base + a, base + b)
+            return False
+        except FileNotFoundError:
+            pass
+    return True
 
 
 def prune_spawns(days=2):
@@ -782,6 +811,7 @@ def cmd_pickup(a):
     with open(base + '.claimed') as f:
         req = json.load(f)
     req['sessionId'] = me.get('sessionId') or a.self
+    update_child(a.token, sessionId=req['sessionId'], pending=None)   # before the brief runs and reads `peers`
     with open(base + '.tmp', 'w') as f:
         json.dump({k: v for k, v in req.items() if k != 'prompt'}, f)
     os.replace(base + '.tmp', base + '.taken')
@@ -893,7 +923,7 @@ def live_ids():
 def cmd_role(a):
     me = writer(a)
     held = role_holder(a)
-    kid = parent_of(me.get('name')) or {}
+    kid = parent_of(me) or {}
     route = kid.get('route') or {}
     handed = (kid.get('successor') and held and kid.get('parentId') == held.get('fromId')   # the planned handoff
               and route.get('workspace') == held.get('workspace')
@@ -933,7 +963,7 @@ def cmd_debrief(a):
     """Prints the session a sub-session sends its debrief to: the live holder of the role its parent held at
     spawn, else its live parent. Exits 1, naming who is gone, when neither is live."""
     me = writer(a)
-    kid = parent_of(me.get('name'))
+    kid = parent_of(me)
     if not kid:
         print(f"hive.py: {me.get('name')} is not a sub-session, so it owes no debrief.", file=sys.stderr)
         return 1

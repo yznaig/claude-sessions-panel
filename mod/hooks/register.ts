@@ -114,8 +114,16 @@ async function watchForSubSession($: EngineInterface): Promise<void> {
       timer.cancel()
       const verdict = JSON.parse(await hive($, ['pickup', '--token', m[1]])) as { action: string; text?: string }
       if (verdict.action !== 'submit' || !verdict.text) return
-      await $.prompt.fill({ text: '', mode: 'replace' })
-      await $.prompt.submit({ text: verdict.text, asUser: true })
+      const brief = verdict.text
+      try {
+        await $.prompt.submit({ text: brief, asUser: true })
+      } catch (err) {
+        // Not sent: hand the brief to the person, one Enter away, rather than lose it.
+        await $.prompt.fill({ text: brief, mode: 'replace' }).catch(() => {})
+        $.ui.toast('Session hive: the sub-session brief could not be sent by itself; it is in the box, press Enter.')
+        throw err
+      }
+      await $.prompt.fill({ text: '', mode: 'replace' }).catch(() => {})
     })().catch(err => { done = true; timer.cancel(); $.ui.log(`session hive: sub-session not taken (${err})`, { to: 'debug' }) })
   })
 }

@@ -6,7 +6,7 @@ import { expect, mock, test } from 'claude-code/testing'
 type Call = { argv: readonly string[]; stdin: string }
 
 function world(on: any, answer: (argv: readonly string[]) => { exitCode?: number; stdout?: string }) {
-  const w = { calls: [] as Call[], received: [] as string[], submitted: [] as { text: string; context?: readonly string[] }[], tokens: 50000, usage: 20, edits: [] as string[] }
+  const w = { calls: [] as Call[], received: [] as string[], submitted: [] as { text: string; context?: readonly string[] }[], failSubmit: false, tokens: 50000, usage: 20, edits: [] as string[] }
   on('session.id', () => ({ value: 's1' }))
   on('session.cwd', () => ({ value: '/work/repo' }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: w.tokens, window: 1000000 }, rateLimits: [{ kind: 'five_hour', percentUsed: w.usage }, { kind: 'seven_day', percentUsed: 88 }] } }))
@@ -17,7 +17,7 @@ function world(on: any, answer: (argv: readonly string[]) => { exitCode?: number
     return { value: { exitCode: a.exitCode ?? 0, stdout: a.stdout ?? '', stderr: '' } }
   })
   on('session.receive', (_: unknown, e: { text: string }) => { w.received.push(e.text); return { text: e.text } })
-  on('prompt.submit', (_: unknown, e: { text: string; context?: readonly string[] }) => { w.submitted.push({ text: e.text, context: e.context }); return { text: e.text, context: e.context } })
+  on('prompt.submit', (_: unknown, e: { text: string; context?: readonly string[] }) => { if (w.failSubmit) throw new Error('refused'); w.submitted.push({ text: e.text, context: e.context }); return { text: e.text, context: e.context } })
   on('prompt.context', (_: unknown, e: { blocks: readonly unknown[] }) => ({ blocks: e.blocks }))
   on('session.send', () => ({ isDelivered: true }))
   on('ui.log', () => ({ value: undefined }))
@@ -248,4 +248,14 @@ test('with no request open, a fresh tab does not watch its box', async ($, on) =
   await $.session.start({ cwd: '/work/repo', surface: null, isInteractive: true })
   await clock.advance(5000)
   expect(w.calls.filter(c => sub(c.argv) === 'pickup')).toEqual([])
+})
+
+test('when the brief cannot be sent, it is left in the box for the person', async ($, on) => {
+  const box = { text: 'Starting sub-session notice-drafts… [hive:aaaa1111bbbb2222]' }
+  const { w, clock, fills } = freshTab(on, box)
+  w.failSubmit = true
+  on('ui.toast', () => ({ value: undefined }))
+  await $.session.start({ cwd: '/work/repo', surface: null, isInteractive: true })
+  await clock.advance(500)
+  expect(fills).toEqual(['You are **notice-drafts**…\n\n## Brief\n\nDig in.'])
 })
