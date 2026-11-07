@@ -208,7 +208,8 @@ export const register: Register = on => {
     headless = entrypoint.startsWith('sdk')
     const r = await next(e)
     if (await vscodeShows($)) await write($, true).catch(() => {})
-    if (entrypoint === 'claude-vscode' && e.isInteractive) await watchForSubSession($).catch(() => {})
+    // VS Code starts its sessions with isInteractive false, so the entrypoint is the test.
+    if (entrypoint === 'claude-vscode') await watchForSubSession($).catch(() => {})
     return r
   })
 

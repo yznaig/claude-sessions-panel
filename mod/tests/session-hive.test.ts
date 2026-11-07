@@ -217,7 +217,7 @@ function freshTab(on: any, box: { text: string }, opening = ['aaaa1111bbbb2222.o
 test('a fresh VS Code tab opened with a hive tag takes its request and submits the brief as typed', async ($, on) => {
   const box = { text: '' }
   const { w, clock, fills } = freshTab(on, box)
-  await $.session.start({ cwd: '/work/repo', surface: null, isInteractive: true })
+  await $.session.start({ cwd: '/work/repo', surface: null, isInteractive: false })
   await clock.advance(500)
   expect(w.calls.filter(c => sub(c.argv) === 'pickup')).toEqual([])
   box.text = 'Starting sub-session notice-drafts… [hive:aaaa1111bbbb2222]'
@@ -234,7 +234,7 @@ test('a fresh VS Code tab opened with a hive tag takes its request and submits t
 test('a fresh tab where the person types first, or no request is open, is left alone', async ($, on) => {
   const box = { text: 'what does this function do' }
   const { w, clock } = freshTab(on, box)
-  await $.session.start({ cwd: '/work/repo', surface: null, isInteractive: true })
+  await $.session.start({ cwd: '/work/repo', surface: null, isInteractive: false })
   await clock.advance(1000)
   box.text = '[hive:aaaa1111bbbb2222]'
   await clock.advance(25000)
@@ -245,7 +245,7 @@ test('a fresh tab where the person types first, or no request is open, is left a
 test('with no request open, a fresh tab does not watch its box', async ($, on) => {
   const box = { text: '[hive:aaaa1111bbbb2222]' }
   const { w, clock } = freshTab(on, box, ['aaaa1111bbbb2222.taken'])
-  await $.session.start({ cwd: '/work/repo', surface: null, isInteractive: true })
+  await $.session.start({ cwd: '/work/repo', surface: null, isInteractive: false })
   await clock.advance(5000)
   expect(w.calls.filter(c => sub(c.argv) === 'pickup')).toEqual([])
 })
@@ -255,7 +255,7 @@ test('when the brief cannot be sent, it is left in the box for the person', asyn
   const { w, clock, fills } = freshTab(on, box)
   w.failSubmit = true
   on('ui.toast', () => ({ value: undefined }))
-  await $.session.start({ cwd: '/work/repo', surface: null, isInteractive: true })
+  await $.session.start({ cwd: '/work/repo', surface: null, isInteractive: false })
   await clock.advance(500)
   expect(fills).toEqual(['You are **notice-drafts**…\n\n## Brief\n\nDig in.'])
 })
