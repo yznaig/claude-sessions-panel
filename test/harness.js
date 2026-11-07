@@ -20,6 +20,7 @@ const vscodeStub = {
     getConfiguration: () => ({ get: k => current.config[k], update: async (k, v) => { current.config[k] = v; } }),
     openTextDocument: async uri => ({ uri }),
     onDidChangeConfiguration: () => ({ dispose() {} }),
+    onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
   },
   window: {
     showInputBox: async o => {

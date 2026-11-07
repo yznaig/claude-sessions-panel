@@ -57,8 +57,8 @@ class Hive(unittest.TestCase):
         with open(os.path.join(snaps, 'away.json'), 'w') as f:
             json.dump({'away': on, 'since': int((time.time() - 60) * 1000) if on else None}, f)
 
-    def run_hive(self, *args, stdin='', self_id='me-0001', ok=True, full=False):
-        env = dict(os.environ, HOME=self.home, HIVE_CLAUDE=self.fake_claude())
+    def run_hive(self, *args, stdin='', self_id='me-0001', ok=True, full=False, env_extra=None):
+        env = dict(os.environ, HOME=self.home, HIVE_CLAUDE=self.fake_claude(), **(env_extra or {}))
         p = subprocess.run([sys.executable, '-I', HIVE, '--self', self_id, *args], input=stdin,
                            capture_output=True, text=True, env=env, timeout=30)
         if ok:
@@ -226,13 +226,115 @@ class Hive(unittest.TestCase):
 
     def test_a_sub_session_starts_in_the_background_knowing_its_parent(self):
         r = self.spawn('notice drafts')
-        self.assertEqual(r, {'action': 'started', 'name': 'notice-drafts', 'id': 'abcd1234'})
+        self.assertEqual(r, {'action': 'started', 'name': 'notice-drafts', 'where': 'background', 'id': 'abcd1234'})
         argv = self.spawns()[0]['argv']
         self.assertEqual(argv[:4], ['--bg', '-n', 'notice-drafts', '--'])
         self.assertIn("a sub-session that work-aa started with the user's yes", argv[4])
         self.assertIn('Debrief from sub-session notice-drafts', argv[4])
         self.assertIn('Dig into the delay-notice drafts.', argv[4])
         self.assertIn('work-aa started sub-session notice-drafts', self.run_hive('log'))
+
+    # --- sub-sessions in a VS Code tab ---
+
+    def tab_setup(self, folder=None):
+        """A real folder for this session, and a live panel whose window has `folder` (default: it) open."""
+        self.repo = tempfile.mkdtemp()
+        self.me = self.register(os.getpid(), 'me-0001', 'work-aa', self.repo)
+        panels = os.path.join(self.home, '.claude', 'session-hive', 'panels')
+        os.makedirs(panels, exist_ok=True)
+        with open(os.path.join(panels, f'{os.getpid()}.json'), 'w') as f:
+            json.dump({'pid': os.getpid(), 'procStart': proc_start(os.getpid()), 'folders': [folder or self.repo]}, f)
+        self.spawn_dir = os.path.join(self.home, '.claude', 'session-hive', 'spawn')
+        # A live process to stand in for the new tab's session.
+        self.tab_proc = subprocess.Popen(['sleep', '60'])
+        self.addCleanup(lambda: (self.tab_proc.kill(), self.tab_proc.wait()))
+
+    def fake_panel(self, pickup=True):
+        """Stands in for the panel and the new tab: opens each request, then (pickup) takes it as the tab's
+        session would. Returns the thread and the pickup answers."""
+        import threading
+        got = []
+        def run():
+            end = time.time() + 10
+            while time.time() < end:
+                for f in os.listdir(self.spawn_dir) if os.path.isdir(self.spawn_dir) else []:
+                    if f.endswith('.json'):
+                        token = f[:-5]
+                        os.rename(os.path.join(self.spawn_dir, f), os.path.join(self.spawn_dir, token + '.opening'))
+                        if pickup:
+                            self.register(self.tab_proc.pid, 'tab-0009', 'repo-3', self.repo)
+                            got.append(json.loads(self.run_hive('pickup', '--token', token, self_id='tab-0009')))
+                        return
+                time.sleep(0.05)
+        t = threading.Thread(target=run)
+        t.start()
+        return t, got
+
+    def test_with_a_panel_open_on_the_folder_a_sub_session_starts_in_a_tab(self):
+        self.tab_setup()
+        t, got = self.fake_panel()
+        r = self.spawn('notice drafts')
+        t.join()
+        self.assertEqual(r, {'action': 'started', 'name': 'notice-drafts', 'where': 'tab', 'id': 'tab-0009'})
+        self.assertEqual(self.spawns(), [], 'no background session')
+        self.assertEqual(got[0]['action'], 'submit')
+        self.assertIn("a sub-session that work-aa started with the user's yes", got[0]['text'])
+        self.assertIn('Dig into the delay-notice drafts.', got[0]['text'])
+        with open(os.path.join(self.home, '.claude', 'session-hive', 'children.json')) as f:
+            kid = json.load(f)[-1]
+        self.assertEqual((kid['name'], kid['sessionId'], kid.get('pending')), ('notice-drafts', 'tab-0009', None))
+        debrief = self.run_hive('debrief', self_id='tab-0009', ok=False)
+        self.assertIn('work-aa', debrief, 'the tab session goes by its sub-session name, so it knows its parent')
+
+    def test_a_second_pickup_of_the_same_request_gets_nothing(self):
+        self.tab_setup()
+        t, got = self.fake_panel()
+        self.spawn('notice drafts')
+        t.join()
+        token = [f for f in os.listdir(self.spawn_dir) if f.endswith('.taken')][0][:-6]
+        again = json.loads(self.run_hive('pickup', '--token', token, self_id='tab-0009'))
+        self.assertEqual(again['action'], 'none')
+
+    def test_when_no_panel_opens_the_tab_it_starts_in_the_background(self):
+        self.tab_setup()
+        r = self.spawn_quick('notice drafts')
+        self.assertEqual((r['action'], r['where'], r['id']), ('started', 'background', 'abcd1234'))
+        self.assertIn('no Claude Sessions panel opened a tab', r['note'])
+        self.assertEqual(len(self.spawns()), 1)
+        self.assertTrue(any(f.endswith('.fallback') for f in os.listdir(self.spawn_dir)))
+
+    def test_a_tab_whose_session_never_takes_the_brief_is_withdrawn_and_it_starts_in_the_background(self):
+        self.tab_setup()
+        t, _ = self.fake_panel(pickup=False)
+        r = self.spawn_quick('notice drafts')
+        t.join()
+        self.assertEqual(r['where'], 'background')
+        self.assertIn('never took the brief', r['note'])
+        token = [f for f in os.listdir(self.spawn_dir) if f.endswith('.withdrawn')][0][:-10]
+        late = json.loads(self.run_hive('pickup', '--token', token, self_id='me-0001'))
+        self.assertEqual(late['action'], 'none', 'a late session finds nothing to take')
+
+    def test_a_panel_on_another_folder_is_not_asked(self):
+        self.tab_setup(folder='/somewhere/else')
+        start = time.time()
+        r = self.spawn('notice drafts')
+        self.assertEqual(r['where'], 'background')
+        self.assertNotIn('note', r)
+        self.assertLess(time.time() - start, 5, 'no wait for a tab')
+
+    def test_a_panel_whose_process_ended_is_not_asked(self):
+        self.tab_setup()
+        panels = os.path.join(self.home, '.claude', 'session-hive', 'panels')
+        with open(os.path.join(panels, f'{os.getpid()}.json'), 'w') as f:
+            json.dump({'pid': os.getpid(), 'procStart': '1', 'folders': [self.repo]}, f)
+        self.assertNotIn('note', self.spawn('notice drafts'))
+
+    def test_pickup_refuses_a_token_that_is_not_one(self):
+        self.assertEqual(json.loads(self.run_hive('pickup', '--token', '../children'))['action'], 'none')
+
+    def spawn_quick(self, name):
+        return json.loads(self.run_hive('spawn', '--name', name, stdin='Dig into the delay-notice drafts.', ok=False,
+                                        env_extra={'HIVE_TAB_CLAIM_SECONDS': '1', 'HIVE_TAB_PICKUP_SECONDS': '1'}))
 
     def make_peer_a_child(self):
         os.makedirs(os.path.join(self.home, '.claude', 'session-hive'), exist_ok=True)

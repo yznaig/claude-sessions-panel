@@ -2,6 +2,8 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
 const { Harness, lines: L, words } = require('./harness');
 
 const eq = assert.equal, same = assert.deepEqual;
@@ -1232,4 +1234,35 @@ test('auto colors: the settings default is the same as the built-in rules', () =
   const { DEFAULT_RULES } = require('../autocolor');
   same(pkg.contributes.configuration.properties['claudeSessions.autoColors'].default, DEFAULT_RULES);
   same(DEFAULT_RULES.map(r => r.color), [PURPLE, GREEN, ORANGE, RED]);
+});
+
+// ---- hive sub-sessions open as Claude Code tabs ------------------------------------
+
+function spawnRequest(h, token, fields) {
+  const dir = path.join(h.home, '.claude', 'session-hive', 'spawn');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, token + '.json'), JSON.stringify({ token, name: 'notice-drafts', cwd: h.proj, at: h.now / 1000, prompt: 'the brief', ...fields }));
+  return dir;
+}
+
+withHarness('spawn: a request for this window\'s folder opens a tab with its tag, once', async h => {
+  const dir = spawnRequest(h, 'aaaa1111bbbb2222');
+  spawnRequest(h, 'cccc3333dddd4444', { cwd: '/some/other/repo' });
+  spawnRequest(h, 'eeee5555ffff6666', { at: h.now / 1000 - 120 });
+  h.start();
+  const opened = h.executed.filter(a => a[0] === 'claude-vscode.editor.open');
+  eq(opened.length, 1, 'only the fresh request for this folder');
+  eq(opened[0][1], undefined, 'a new session');
+  eq(opened[0][2], 'Starting sub-session notice-drafts… [hive:aaaa1111bbbb2222]');
+  same(opened[0][6], { programmatic: 'pin-to-panel' }, 'a tab, whatever the preferred location');
+  same(fs.readdirSync(dir).sort(), ['aaaa1111bbbb2222.opening', 'cccc3333dddd4444.json', 'eeee5555ffff6666.json']);
+});
+
+withHarness('spawn: the panel says which folders its window has open while it runs', async h => {
+  const file = path.join(h.home, '.claude', 'session-hive', 'panels', `${process.pid}.json`);
+  h.start();
+  const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
+  same(rec.folders, [h.proj]); eq(rec.pid, process.pid); assert.ok(rec.procStart);
+  h.stop();
+  assert.ok(!fs.existsSync(file), 'gone when the panel stops');
 });

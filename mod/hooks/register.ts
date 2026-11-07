@@ -85,6 +85,41 @@ function isUser(origin: { kind: string } | undefined): boolean {
   return !origin || origin.kind === 'composer' || origin.kind === 'bridge'
 }
 
+// A hive sub-session opened as a VS Code tab: the Claude Sessions panel opens a new tab with
+// "[hive:<token>]" in its prompt box (spawns.js in the panel). This new session takes the request
+// (`hive.py pickup`) and submits its brief as if typed, so the turn runs in the tab. Only a fresh
+// session looks, only while a request is open, and only for about 20 seconds; anything else in the
+// box (the person typing) ends the look.
+const TAG = /\[hive:([0-9a-f]{8,32})\]/
+
+async function watchForSubSession($: EngineInterface): Promise<void> {
+  if ((await $.session.turns()) > 0) return
+  const home = await $.env.get('HOME')
+  const dir = `${home}/.claude/session-hive/spawn`
+  if (!(await $.fs.exists(dir))) return
+  if (!(await $.fs.list(dir)).some(f => f.name.endsWith('.opening'))) return
+  let tries = 0
+  let done = false
+  const timer = $.clock.every(500, () => {
+    if (done) return
+    void (async () => {
+      tries++
+      const box = await $.prompt.read()
+      const m = TAG.exec(box.text)
+      if (!m) {
+        if (box.text.trim() || tries >= 40) { done = true; timer.cancel() }
+        return
+      }
+      done = true
+      timer.cancel()
+      const verdict = JSON.parse(await hive($, ['pickup', '--token', m[1]])) as { action: string; text?: string }
+      if (verdict.action !== 'submit' || !verdict.text) return
+      await $.prompt.fill({ text: '', mode: 'replace' })
+      await $.prompt.submit({ text: verdict.text, asUser: true })
+    })().catch(err => { done = true; timer.cancel(); $.ui.log(`session hive: sub-session not taken (${err})`, { to: 'debug' }) })
+  })
+}
+
 export const register: Register = on => {
   on('prompt.context', async ($, e, next) => {
     const r = await next(e)
@@ -161,9 +196,11 @@ export const register: Register = on => {
     .catch(($, e, next) => next(e))
 
   on('session.start', async ($, e, next) => {
-    headless = ((await $.env.get('CLAUDE_CODE_ENTRYPOINT').catch(() => undefined)) ?? '').startsWith('sdk')
+    const entrypoint = (await $.env.get('CLAUDE_CODE_ENTRYPOINT').catch(() => undefined)) ?? ''
+    headless = entrypoint.startsWith('sdk')
     const r = await next(e)
     if (await vscodeShows($)) await write($, true).catch(() => {})
+    if (entrypoint === 'claude-vscode' && e.isInteractive) await watchForSubSession($).catch(() => {})
     return r
   })
 

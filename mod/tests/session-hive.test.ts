@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 // The hooks hand hive.py what the engine knows and act on its answer. Here a
 // stand-in for hive.py records each call and answers as the test says.
@@ -195,4 +195,57 @@ test('a VS Code session keeps the hive', async ($, on) => {
   const ctx = await $.prompt.context({ blocks: [] })
   expect(ctx.blocks.map(b => b.name)).toEqual(['sessionHive'])
   expect(w.calls.length).toBe(1)
+})
+
+// A sub-session opened as a VS Code tab: the panel put "[hive:<token>]" in the new tab's box.
+
+function freshTab(on: any, box: { text: string }, opening = ['aaaa1111bbbb2222.opening']) {
+  const w = world(on, argv => ({ stdout: sub(argv) === 'pickup' ? JSON.stringify({ action: 'submit', text: 'You are **notice-drafts**…\n\n## Brief\n\nDig in.' }) : '' }))
+  const clock = mock.clock(on)
+  mock.env(on, { CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', HOME: '/home/me' })
+  const fills: string[] = []
+  on('session.surfaces', () => ({ value: [] }))
+  on('session.turns', () => ({ value: 0 }))
+  on('fs.exists', () => ({ value: true }))
+  on('fs.list', () => ({ value: opening.map(name => ({ name, kind: 'file' })) }))
+  on('prompt.read', () => ({ value: { text: box.text, cursor: 0 } }))
+  on('prompt.fill', (_: unknown, e: { text: string }) => { fills.push(e.text); box.text = e.text; return { isFilled: true, text: e.text } })
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  return { w, clock, fills }
+}
+
+test('a fresh VS Code tab opened with a hive tag takes its request and submits the brief as typed', async ($, on) => {
+  const box = { text: '' }
+  const { w, clock, fills } = freshTab(on, box)
+  await $.session.start({ cwd: '/work/repo', surface: null, isInteractive: true })
+  await clock.advance(500)
+  expect(w.calls.filter(c => sub(c.argv) === 'pickup')).toEqual([])
+  box.text = 'Starting sub-session notice-drafts… [hive:aaaa1111bbbb2222]'
+  await clock.advance(500)
+  const pickups = w.calls.filter(c => sub(c.argv) === 'pickup')
+  expect(pickups.length).toBe(1)
+  expect(pickups[0]!.argv.join(' ')).toContain('pickup --token aaaa1111bbbb2222')
+  expect(fills).toEqual([''])
+  expect(w.submitted.map(s => s.text)).toEqual(['You are **notice-drafts**…\n\n## Brief\n\nDig in.'])
+  await clock.advance(5000)
+  expect(w.calls.filter(c => sub(c.argv) === 'pickup').length).toBe(1)
+})
+
+test('a fresh tab where the person types first, or no request is open, is left alone', async ($, on) => {
+  const box = { text: 'what does this function do' }
+  const { w, clock } = freshTab(on, box)
+  await $.session.start({ cwd: '/work/repo', surface: null, isInteractive: true })
+  await clock.advance(1000)
+  box.text = '[hive:aaaa1111bbbb2222]'
+  await clock.advance(25000)
+  expect(w.calls.filter(c => sub(c.argv) === 'pickup')).toEqual([])
+  expect(w.submitted).toEqual([])
+})
+
+test('with no request open, a fresh tab does not watch its box', async ($, on) => {
+  const box = { text: '[hive:aaaa1111bbbb2222]' }
+  const { w, clock } = freshTab(on, box, ['aaaa1111bbbb2222.taken'])
+  await $.session.start({ cwd: '/work/repo', surface: null, isInteractive: true })
+  await clock.advance(5000)
+  expect(w.calls.filter(c => sub(c.argv) === 'pickup')).toEqual([])
 })

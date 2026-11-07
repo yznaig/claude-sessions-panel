@@ -10,7 +10,11 @@
   spawn  --name NAME [--unattended] [--successor]   start a sub-session of this one (brief on stdin); one
                                   level deep, except that a desk role's holder may start its own even as a
                                   sub-session; --unattended only while the user is away (the panel's moon), two
-                                  per away; --successor (desk holders) starts the session that takes the role
+                                  per away; --successor (desk holders) starts the session that takes the role.
+                                  It opens as a Claude Code tab when a Claude Sessions panel has this folder
+                                  open, else in the background (`claude --bg`)
+  pickup --token T                for a new VS Code session: take the sub-session request its prompt box was
+                                  opened with; prints {"action": "submit", "text"} or {"action": "none"}
   log    [--hours N]              the message log, newest last
   decide --workspace DIR --area A TEXT   record that the user decided something; prints its id (e1030-07)
   role   --workspace DIR --area A --role R   record that this session now holds role R for area A
@@ -53,6 +57,10 @@ CHILDREN = os.path.join(HIVE, 'children.json')
 DESK_ROLE = 'desk'           # a session holding this role may start sub-sessions even when it is one itself
 UNATTENDED_LIMIT = 2         # sub-sessions one session may start without the user's yes, per stretch away
 CLAUDE = os.environ.get('HIVE_CLAUDE', 'claude')
+SPAWNS = os.path.join(HIVE, 'spawn')      # <token>.json: a sub-session waiting for a panel to open its tab
+PANELS = os.path.join(HIVE, 'panels')     # <pid>.json: a live Claude Sessions panel and its window's folders
+TAB_CLAIM_SECONDS = float(os.environ.get('HIVE_TAB_CLAIM_SECONDS', 8))     # for a panel to open the tab
+TAB_PICKUP_SECONDS = float(os.environ.get('HIVE_TAB_PICKUP_SECONDS', 40))  # for the tab's session to take it
 KEEP_GOING = '[keep going]'  # a note's first line starts with this when its work can't wait for the user
 MOVED = 'Thread moved:'      # a handoff note's first line
 CURSORS = os.path.join(HIVE, 'cursors')   # <session id>.json: when this session last took "Since you last looked"
@@ -102,6 +110,12 @@ def registry():
         if started is None or (r.get('procStart') and str(r['procStart']) != started):
             continue
         out[pid] = r
+    # A sub-session started in a VS Code tab can't be named at launch: it goes by its sub-session name
+    # here unless someone has named it since.
+    named = {k['sessionId']: k['name'] for k in children() if k.get('sessionId') and k.get('name')}
+    for r in out.values():
+        if r.get('sessionId') in named and r.get('nameSource') not in ('user', 'peer'):
+            r['name'] = named[r['sessionId']]
     return out
 
 
@@ -550,11 +564,12 @@ def role_command(route):
 
 
 def start_child(me, name, brief, unattended=False, successor=False):
-    """Start a sub-session of `me` in the background. Returns {"action": "started", "name", "id"} or
-    {"action": "refused", "reason"}. One level deep, except that a session holding a desk role may start its
+    """Start a sub-session of `me`: in a Claude Code tab when a Claude Sessions panel has its folder open,
+    else in the background (and in the background when the tab doesn't come up). Returns {"action": "started",
+    "name", "id", "where": "tab" | "background", "note"?} or {"action": "refused", "reason"}. One level deep, except that a session holding a desk role may start its
     own even when it was itself started as one (a Desk's successor); unattended only while the user is away,
     two per away. With successor, the new session is told to take over `me`'s desk role and owes no debrief."""
-    import fcntl, subprocess
+    import fcntl
     my_name = me.get('name', '?')
     name = re.sub(r'[^A-Za-z0-9._-]+', '-', name).strip('-')[:40] or 'sub-session'
     os.makedirs(HIVE, exist_ok=True)
@@ -598,28 +613,181 @@ def start_child(me, name, brief, unattended=False, successor=False):
                       + ". Then tell the user it is done and offer to close. "
                       "You cannot start sub-sessions of your own.\n\n## Brief\n\n")
         started = time.time()   # before the launch: a successor can take its role before `claude --bg` returns
-        try:
-            cwd = me.get('cwd') if os.path.isdir(me.get('cwd') or '') else os.getcwd()
-            p = subprocess.run([CLAUDE, '--bg', '-n', name, '--', header + brief], cwd=cwd,
-                               capture_output=True, text=True, timeout=60)
-        except (OSError, subprocess.TimeoutExpired) as e:
-            return {'action': 'refused', 'reason': f'claude --bg did not start: {e}'}
-        said = (p.stdout + p.stderr).strip()
-        m = re.search(r'backgrounded\s*·\s*([0-9a-f]{6,})', said)
-        if p.returncode != 0 or not m:
-            return {'action': 'refused', 'reason': 'claude --bg did not start: ' + short(said, 200)}
-        kids.append({'name': name, 'bgId': m.group(1), 'parent': my_name, 'parentId': me.get('sessionId'),
-                     'unattended': unattended, 'at': started, 'cwd': me.get('cwd'), 'route': route,
-                     'successor': successor})
-        tmp = CHILDREN + '.tmp'
-        with open(tmp, 'w') as f:
-            json.dump(kids, f)
-        os.replace(tmp, CHILDREN)
+        cwd = me.get('cwd') if os.path.isdir(me.get('cwd') or '') else os.getcwd()
+        kid = {'name': name, 'parent': my_name, 'parentId': me.get('sessionId'), 'unattended': unattended,
+               'at': started, 'cwd': me.get('cwd'), 'route': route, 'successor': successor}
+        tab = os.environ.get('HIVE_SPAWN') != 'bg' and panel_for(cwd)
+        if tab:
+            kid['token'] = secrets_token()
+            kid['pending'] = True   # holds the name while the tab opens, outside the lock
+        else:
+            bg_id, said = launch_bg(cwd, name, header + brief)
+            if not bg_id:
+                return {'action': 'refused', 'reason': said}
+            kid['bgId'] = bg_id
+        save_children(kids + [kid])
+    where, note, the_id = 'background', None, kid.get('bgId')
+    if tab:
+        session_id, note = open_tab(kid['token'], name, cwd, header + brief, my_name)
+        if session_id:
+            where, the_id = 'tab', session_id[:8]
+            update_child(kid['token'], sessionId=session_id, pending=None)
+        else:
+            the_id, said = launch_bg(cwd, name, header + brief)
+            if not the_id:
+                update_child(kid['token'], remove=True)
+                return {'action': 'refused', 'reason': note + '; then ' + said}
+            update_child(kid['token'], bgId=the_id, pending=None)
     append(LOG, {'at': time.time(), 'dir': 'spawn', 'from': my_name, 'fromId': me.get('sessionId'),
                  'workspace': os.path.abspath(me.get('cwd') or os.getcwd()), 'to': name,
                  'first': ('unattended: ' if unattended else '') + ('successor: ' if successor else '')
                  + first_line(brief)})
-    return {'action': 'started', 'name': name, 'id': m.group(1)}
+    out = {'action': 'started', 'name': name, 'where': where, 'id': the_id}
+    if note:
+        out['note'] = note
+    return out
+
+
+def secrets_token():
+    import secrets
+    return secrets.token_hex(8)
+
+
+def save_children(kids):
+    tmp = CHILDREN + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(kids, f)
+    os.replace(tmp, CHILDREN)
+
+
+def update_child(token, remove=False, **fields):
+    """Under the children lock: set fields on the sub-session started with `token` (None drops a field)."""
+    import fcntl
+    with open(CHILDREN + '.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        kids = []
+        for k in children():
+            if k.get('token') == token:
+                if remove:
+                    continue
+                for key, v in fields.items():
+                    if v is None:
+                        k.pop(key, None)
+                    else:
+                        k[key] = v
+            kids.append(k)
+        save_children(kids)
+
+
+def launch_bg(cwd, name, prompt):
+    """`claude --bg`: returns (its id, None) or (None, why it did not start)."""
+    import subprocess
+    try:
+        p = subprocess.run([CLAUDE, '--bg', '-n', name, '--', prompt], cwd=cwd,
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, f'claude --bg did not start: {e}'
+    said = (p.stdout + p.stderr).strip()
+    m = re.search(r'backgrounded\s*·\s*([0-9a-f]{6,})', said)
+    if p.returncode != 0 or not m:
+        return None, 'claude --bg did not start: ' + short(said, 200)
+    return m.group(1), None
+
+
+def panel_for(cwd):
+    """Whether a live Claude Sessions panel's window has `cwd` as its first folder: a new Claude Code tab
+    there starts in `cwd`. Each panel keeps PANELS/<extension host pid>.json while it runs."""
+    want = os.path.abspath(cwd).rstrip('/')
+    for f in glob.glob(os.path.join(PANELS, '*.json')):
+        try:
+            with open(f) as fh:
+                p = json.load(fh)
+            pid = int(p['pid'])
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if proc_start(pid) is None or (p.get('procStart') and str(p['procStart']) != proc_start(pid)):
+            continue
+        folders = p.get('folders') or []
+        if folders and os.path.abspath(folders[0]).rstrip('/') == want:
+            return True
+    return False
+
+
+def wait_for(path, seconds):
+    end = time.time() + seconds
+    while True:
+        if os.path.exists(path):
+            return True
+        if time.time() >= end:
+            return False
+        time.sleep(0.2)
+
+
+def open_tab(token, name, cwd, prompt, parent):
+    """Ask the panel for a Claude Code tab, then wait for its session to take the prompt (`pickup`).
+    Returns (the new session's id, None), or (None, why) once the request is withdrawn, so a late panel
+    or session finds nothing to take. Files: <token>.json asked → .opening (a panel opened the tab) →
+    .taken (the session took it); .fallback or .withdrawn when it went to the background instead."""
+    os.makedirs(SPAWNS, exist_ok=True)
+    prune_spawns()
+    base = os.path.join(SPAWNS, token)
+    req = {'token': token, 'name': name, 'cwd': os.path.abspath(cwd), 'parent': parent, 'at': time.time(),
+           'prompt': prompt}
+    with open(base + '.tmp', 'w') as f:
+        json.dump(req, f)
+    os.replace(base + '.tmp', base + '.json')
+    end = time.time() + TAB_CLAIM_SECONDS
+    while os.path.exists(base + '.json') and time.time() < end:
+        time.sleep(0.2)
+    try:
+        os.rename(base + '.json', base + '.fallback')
+        return None, 'no Claude Sessions panel opened a tab'
+    except FileNotFoundError:
+        pass   # a panel took it
+    if not wait_for(base + '.taken', TAB_PICKUP_SECONDS):
+        try:
+            os.rename(base + '.opening', base + '.withdrawn')
+            return None, 'a tab opened but its session never took the brief (close the tab)'
+        except FileNotFoundError:
+            wait_for(base + '.taken', 5)   # taken this instant
+    try:
+        with open(base + '.taken') as f:
+            return json.load(f)['sessionId'], None
+    except (OSError, ValueError, KeyError):
+        return None, 'the tab\'s session took the brief but left no session id'
+
+
+def prune_spawns(days=2):
+    now = time.time()
+    for f in glob.glob(os.path.join(SPAWNS, '*')):
+        try:
+            if now - os.path.getmtime(f) > days * 86400:
+                os.remove(f)
+        except OSError:
+            pass
+
+
+def cmd_pickup(a):
+    """The new session's half: take the request <token>.opening, answer with its prompt to submit."""
+    if not re.fullmatch(r'[0-9a-f]{8,32}', a.token or ''):
+        print(json.dumps({'action': 'none', 'reason': 'not a spawn token'}))
+        return 0
+    base = os.path.join(SPAWNS, a.token)
+    try:
+        os.rename(base + '.opening', base + '.claimed')
+    except FileNotFoundError:
+        print(json.dumps({'action': 'none', 'reason': 'no open request with that token (withdrawn or taken)'}))
+        return 0
+    me = find_self(registry(), a.self) or {}
+    with open(base + '.claimed') as f:
+        req = json.load(f)
+    req['sessionId'] = me.get('sessionId') or a.self
+    with open(base + '.tmp', 'w') as f:
+        json.dump({k: v for k, v in req.items() if k != 'prompt'}, f)
+    os.replace(base + '.tmp', base + '.taken')
+    os.remove(base + '.claimed')
+    print(json.dumps({'action': 'submit', 'name': req.get('name'), 'text': req['prompt']}))
+    return 0
 
 
 def cmd_spawn(a):
@@ -893,6 +1061,7 @@ def main():
     p = sub.add_parser('claim'); p.add_argument('--path', required=True)
     p = sub.add_parser('spawn'); p.add_argument('--name', required=True); p.add_argument('--unattended', action='store_true')
     p.add_argument('--successor', action='store_true', help="the new session takes over this session's desk role")
+    p = sub.add_parser('pickup'); p.add_argument('--token', required=True)
     p = sub.add_parser('log'); p.add_argument('--hours', type=float, default=24)
     p = sub.add_parser('decide'); p.add_argument('--workspace', required=True); p.add_argument('--area', required=True)
     p.add_argument('text', nargs='+')
@@ -904,7 +1073,7 @@ def main():
     p = sub.add_parser('since'); p.add_argument('--cwd'); p.add_argument('--take', action='store_true')
     a = ap.parse_args()
     return {'peers': cmd_peers, 'receive': cmd_receive, 'held': cmd_held, 'sent': cmd_sent, 'claim': cmd_claim,
-            'spawn': cmd_spawn, 'log': cmd_log, 'decide': cmd_decide, 'role': cmd_role, 'who': cmd_who, 'debrief': cmd_debrief,
+            'spawn': cmd_spawn, 'pickup': cmd_pickup, 'log': cmd_log, 'decide': cmd_decide, 'role': cmd_role, 'who': cmd_who, 'debrief': cmd_debrief,
             'note': cmd_note, 'since': cmd_since}[a.cmd](a)
 
 

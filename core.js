@@ -66,6 +66,7 @@ const { SessionList } = require('./sessions');
 const { windowScope } = require('./window');
 const { readAway, writeAway } = require('./away');
 const { SearchIndex, askPrompt, readAnswer } = require('./search');
+const spawns = require('./spawns');
 
 // ---- sound ------------------------------------------------------------------
 
@@ -691,6 +692,26 @@ function start(host) {
   try { fs.mkdirSync(trailDir(), { recursive: true }); trailWatcher = fs.watch(trailDir(), { persistent: false }, schedule); } catch { /* no watch: the poll covers it */ }
   const poll = setInterval(tick, 5000); // fallback: pid deaths and missed events
   subs.push({ dispose: () => { if (watcher) watcher.close(); if (trailWatcher) trailWatcher.close(); clearInterval(poll); if (timer) clearTimeout(timer); } });
+
+  // Hive sub-sessions open here as Claude Code tabs (spawns.js). The window announces its folders,
+  // and opens each request for its first folder, the folder a new tab's session starts in.
+  const folders = () => (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath);
+  let unannounce = () => {};
+  const announce = () => { unannounce(); unannounce = spawns.announcePanel(os.homedir(), process.pid, procs.procStartOf(process.pid), folders()); };
+  const openRequested = () => {
+    for (const req of spawns.takeRequests(os.homedir(), folders(), Date.now())) {
+      Promise.resolve(vscode.commands.executeCommand(OPEN_COMMAND, undefined, spawns.tagText(req), undefined, undefined, undefined, { programmatic: 'pin-to-panel' }))
+        .catch(err => vscode.window.showWarningMessage(`Claude Sessions: couldn't open a tab for sub-session "${req.name}": ${err && err.message || err}. It will start in the background instead.`));
+    }
+  };
+  announce();
+  const spawnDir = path.join(spawns.hiveDir(os.homedir()), 'spawn');
+  let spawnWatcher = null;
+  try { fs.mkdirSync(spawnDir, { recursive: true }); spawnWatcher = fs.watch(spawnDir, { persistent: false }, openRequested); } catch { /* the poll covers it */ }
+  const spawnPoll = setInterval(openRequested, 1000); // a missed watch event costs a second, not the tab
+  openRequested();
+  subs.push(vscode.workspace.onDidChangeWorkspaceFolders(announce));
+  subs.push({ dispose: () => { if (spawnWatcher) spawnWatcher.close(); clearInterval(spawnPoll); unannounce(); } });
   subs.push(vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('claudeSessions')) tick(); }));
 
   subs.push(
