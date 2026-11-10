@@ -623,7 +623,8 @@ class Hive(unittest.TestCase):
     # user's pick from "lets just do a big merge", and 11 merge words were recorded again as new decisions).
 
     def test_decide_without_the_users_words_or_a_box_answer_is_refused_and_writes_nothing(self):
-        for extra in ((), ('--words', ''), ('--words', ' \n '), ('--box', '')):
+        for extra in ((), ('--words', ''), ('--words', ' \n '), ('--box', ''), ('--box', '  '),
+                      ('--words', '', '--box', 'Option A'), ('--restates', 'e0101-01', '--words', '')):
             p = self.run_hive('decide', *extra, '--workspace', '/work/repo', '--area', 'qa', 'ship it', ok=False, full=True)
             self.assertEqual(p.returncode, 2, extra)
             self.assertEqual(p.stdout, '', 'no id is printed, so there is nothing to cite')
@@ -684,10 +685,16 @@ class Hive(unittest.TestCase):
         self.run_hive('decide', '--restates', f'[{first}]', '--words', 'yes, still ship it', '--workspace', '/work/repo',
                       '--area', 'qa', 'ship it (said again)')
         self.assertEqual((self.log()[-1]['dir'], self.log()[-1]['words']), ('note', 'yes, still ship it'))
+        shown = f'restates {first}: ship it (said again) · said "yes, still ship it"'
+        self.assertIn(f'work-aa noted: {shown}', self.run_hive('log'))
+        self.assertIn(f'note {shown} (work-aa)', self.since(who='peer-0002'))
 
     def test_restates_refuses_an_id_the_log_does_not_hold_or_another_areas_decision(self):
         first = self.run_hive('decide', '--words', 'yes', '--workspace', '/work/repo', '--area', 'qa', 'ship it').strip()
         for args, why in ((('--restates', 'e0101-99', '--workspace', '/work/repo', '--area', 'qa'), 'no decision e0101-99'),
+                          # an empty id never falls through to a new decision, words or not
+                          (('--restates', '', '--words', 'yes', '--workspace', '/work/repo', '--area', 'qa'), 'is empty'),
+                          (('--restates', ' [] ', '--workspace', '/work/repo', '--area', 'qa'), 'is empty'),
                           (('--restates', first, '--workspace', '/work/repo', '--area', 'runner'), 'is a decision for qa'),
                           (('--restates', first, '--workspace', '/elsewhere', '--area', 'qa'), 'is a decision for qa')):
             p = self.run_hive('decide', *args, 'again', ok=False, full=True)

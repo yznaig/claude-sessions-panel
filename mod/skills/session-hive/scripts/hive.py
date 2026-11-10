@@ -885,7 +885,7 @@ def cmd_log(a):
         elif r.get('dir') == 'moved':
             print(f"{stamp}  {r.get('from')} → {r.get('to')}  thread moved: {r.get('thread')} → {r.get('holder')}")
         elif r.get('dir') == 'note':
-            print(f"{stamp}  {r.get('from')} noted: {r.get('text')}")
+            print(f"{stamp}  {r.get('from')} noted: {r.get('text')}{quoted(r)}")
         elif r.get('dir') == 'spawn':
             print(f"{stamp}  {r.get('from')} started sub-session {r.get('to')}: {r.get('first')}")
         elif r.get('dir') == 'claim':
@@ -929,10 +929,11 @@ def quoted(r):
 def restate(a, text, quote):
     """decide --restates ID: a met condition or a repeated word is a note beside the decision it restates, in that
     decision's workspace and area, never a second decision. Prints the id of the decision, the one to cite."""
-    rec_id = a.restates.strip().strip('[]')
-    found = [r for r in read_lines(LOG) if r.get('dir') == 'decided' and r.get('id') == rec_id]
+    rec_id = a.restates.strip().strip('[]').strip()
+    found = [r for r in read_lines(LOG) if r.get('dir') == 'decided' and r.get('id') == rec_id] if rec_id else []
     if not found:
-        sys.exit(f'hive.py: no decision {rec_id} in the log, so there is nothing to restate; nothing was written.')
+        sys.exit(f"hive.py: no decision {rec_id or '(--restates is empty)'} in the log, so there is nothing to "
+                 'restate; nothing was written.')
     of = max(found, key=lambda r: r.get('at', 0))
     ws, area = workspace_arg(a.workspace), label(a.area, 60, 'area')
     if (of.get('workspace'), (of.get('area') or '').lower()) != (ws, area.lower()):
@@ -962,7 +963,7 @@ def cmd_decide(a):
     if empty:
         print(f'hive.py: --{empty[0]} is empty; nothing was written.', file=sys.stderr)
         return 2
-    if a.restates:
+    if a.restates is not None:   # an empty id is refused there: it never falls through to a new decision
         return restate(a, text, quote)
     if not quote:
         print('hive.py: a decision record quotes the user, so nothing was written. Add --words "<what they said that '
@@ -1086,15 +1087,16 @@ def fold_line(r):
     k = r.get('dir')
     f = lambda key, n=40: short(str(r.get(key) or ''), n)
     who, to = f('from'), f('to')
+    said = short(quoted(r), 70)
+    said = ' ' + said if said else ''
     if k == 'decided':
-        said = short(quoted(r), 70)
-        what = f"decided [{f('id', 16)}] {f('area')}: {f('text', 140)}{' ' + said if said else ''} ({who})"
+        what = f"decided [{f('id', 16)}] {f('area')}: {f('text', 140)}{said} ({who})"
     elif k == 'role':
         what = f"role {f('area')}: {who} is {f('role')}"
     elif k == 'moved':
         what = f"moved {f('thread', 90)} → {f('holder')} ({who} to {to})"
     elif k == 'note':
-        what = f"note {f('text', 140)} ({who})"
+        what = f"note {f('text', 140)}{said} ({who})"   # a repeated word noted with `decide --restates`
     elif k == 'out' and not (r.get('first') or '').startswith(MOVED):   # a handoff shows as its `moved` record
         what = f"message {who} → {to}: {f('first', 110)}"
     elif k == 'claim':
