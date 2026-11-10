@@ -609,8 +609,8 @@ class Hive(unittest.TestCase):
 
     def test_decide_prints_a_date_based_id_and_logs_the_decision(self):
         day = time.strftime('%m%d')
-        first = self.run_hive('decide', '--workspace', '/work/repo', '--area', 'runner', 'no fourth account').strip()
-        second = self.run_hive('decide', '--workspace', '/work/repo/', '--area', 'qa', 'ship it', self_id='peer-0002').strip()
+        first = self.run_hive('decide', '--words', 'yes', '--workspace', '/work/repo', '--area', 'runner', 'no fourth account').strip()
+        second = self.run_hive('decide', '--words', 'yes', '--workspace', '/work/repo/', '--area', 'qa', 'ship it', self_id='peer-0002').strip()
         self.assertEqual((first, second), (f'e{day}-01', f'e{day}-02'))
         rec = self.log()[0]
         self.assertEqual({k: rec[k] for k in ('dir', 'id', 'from', 'workspace', 'area', 'text')},
@@ -619,8 +619,91 @@ class Hive(unittest.TestCase):
         self.assertEqual(self.log()[1]['workspace'], '/work/repo', 'the path is normalised')
         self.assertIn(f'work-aa recorded decision [e{day}-01] runner (/work/repo): no fourth account', self.run_hive('log'))
 
+    # A decision record quotes the user (HIRE time retro 2026-11-08: a live database fix was recorded as the
+    # user's pick from "lets just do a big merge", and 11 merge words were recorded again as new decisions).
+
+    def test_decide_without_the_users_words_or_a_box_answer_is_refused_and_writes_nothing(self):
+        for extra in ((), ('--words', ''), ('--words', ' \n '), ('--box', '')):
+            p = self.run_hive('decide', *extra, '--workspace', '/work/repo', '--area', 'qa', 'ship it', ok=False, full=True)
+            self.assertEqual(p.returncode, 2, extra)
+            self.assertEqual(p.stdout, '', 'no id is printed, so there is nothing to cite')
+            self.assertIn('nothing was written', p.stderr)
+        bare = self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', 'ship it', ok=False, full=True).stderr
+        for way_on in ('--words', '--box', '--restates <id>'):
+            self.assertIn(way_on, bare, 'the refusal names what to pass')
+        self.assertFalse(os.path.exists(os.path.join(self.home, '.claude', 'session-hive', 'log.ndjson')))
+
+    def test_decide_records_the_users_words_or_the_option_they_picked(self):
+        day = time.strftime('%m%d')
+        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', '--words', 'Yup lets\ndo it', 'spend approved')
+        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', '--box', 'Option B: wait a day', 'wait a day',
+                      self_id='peer-0002')
+        said, picked = self.log()
+        self.assertEqual((said['words'], 'box' in said), ('Yup lets do it', False))
+        self.assertEqual((picked['box'], 'words' in picked), ('Option B: wait a day', False))
+        log = self.run_hive('log')
+        self.assertIn(f'[e{day}-01] qa (/work/repo): spend approved · said "Yup lets do it"', log)
+        self.assertIn(f'[e{day}-02] qa (/work/repo): wait a day · picked "Option B: wait a day"', log)
+        self.assertRegex(self.since(), rf'decided \[e{day}-02\] qa: wait a day · picked "Option B: wait a day" \(work-bb\)')
+
+    def test_long_words_are_cut_on_the_record_and_shorter_in_the_fold(self):
+        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', '--words', 'w' * 500, 'x', self_id='peer-0002')
+        self.assertEqual(len(self.log()[-1]['words']), 400)
+        self.assertTrue(self.log()[-1]['words'].endswith('…'))
+        line = next(l for l in self.since().splitlines() if ' decided ' in l)
+        self.assertLess(len(line), 140)
+        self.assertTrue(line.endswith('… (work-bb)'), line)
+
+    def test_a_record_made_before_words_were_kept_still_reads(self):
+        self.add_log({'at': time.time(), 'dir': 'decided', 'id': 'e-old', 'from': 'work-bb', 'fromId': 'peer-0002',
+                      'workspace': '/work/repo', 'area': 'qa', 'text': 'an old decision'})
+        self.assertRegex(self.since(), r'(?m)decided \[e-old\] qa: an old decision \(work-bb\)$')
+        self.assertRegex(self.run_hive('log'), r'(?m)\[e-old\] qa \(/work/repo\): an old decision$')
+
+    def test_restates_writes_a_note_beside_the_decision_not_a_new_one(self):
+        day = time.strftime('%m%d')
+        first = self.run_hive('decide', '--words', 'merge 12 once the login check passes', '--workspace', '/work/repo',
+                              '--area', 'merging', 'merge: #12 (after the login check)', self_id='peer-0002').strip()
+        far = self.elsewhere()   # a session elsewhere noting it: the note counts for the decision's workspace
+        p = self.run_hive('decide', '--restates', first, '--workspace', '/work/repo/', '--area', 'Merging',
+                          'merge: #12 (condition met)', self_id=far['sessionId'], full=True)
+        self.assertEqual(p.stdout.strip(), first, 'the id to cite is still the one decision')
+        self.assertIn('no new decision', p.stderr)
+        note = self.log()[-1]
+        self.assertEqual({k: note.get(k) for k in ('dir', 'id', 'restates', 'workspace', 'area', 'text', 'from')},
+                         {'dir': 'note', 'id': None, 'restates': first, 'workspace': '/work/repo', 'area': 'merging',
+                          'text': f'restates {first}: merge: #12 (condition met)', 'from': 'other-cc'})
+        self.assertEqual([r['id'] for r in self.log() if r['dir'] == 'decided'], [first])
+        self.assertRegex(self.since(), rf'note restates {first}: merge: #12 \(condition met\) \(other-cc\)')
+        # the next decision of the day takes the next number: the note used none
+        self.assertEqual(self.run_hive('decide', '--words', 'yes', '--workspace', '/work/repo', '--area', 'qa', 'next').strip(),
+                         f'e{day}-02')
+
+    def test_restates_keeps_a_repeated_word_when_one_is_given(self):
+        first = self.run_hive('decide', '--words', 'yes', '--workspace', '/work/repo', '--area', 'qa', 'ship it').strip()
+        self.run_hive('decide', '--restates', f'[{first}]', '--words', 'yes, still ship it', '--workspace', '/work/repo',
+                      '--area', 'qa', 'ship it (said again)')
+        self.assertEqual((self.log()[-1]['dir'], self.log()[-1]['words']), ('note', 'yes, still ship it'))
+
+    def test_restates_refuses_an_id_the_log_does_not_hold_or_another_areas_decision(self):
+        first = self.run_hive('decide', '--words', 'yes', '--workspace', '/work/repo', '--area', 'qa', 'ship it').strip()
+        for args, why in ((('--restates', 'e0101-99', '--workspace', '/work/repo', '--area', 'qa'), 'no decision e0101-99'),
+                          (('--restates', first, '--workspace', '/work/repo', '--area', 'runner'), 'is a decision for qa'),
+                          (('--restates', first, '--workspace', '/elsewhere', '--area', 'qa'), 'is a decision for qa')):
+            p = self.run_hive('decide', *args, 'again', ok=False, full=True)
+            self.assertNotEqual(p.returncode, 0)
+            self.assertEqual(p.stdout, '')
+            self.assertIn(why, p.stderr)
+        self.assertEqual(len(self.log()), 1, 'nothing was written')
+
+    def test_the_house_rules_tell_a_session_to_quote_the_user(self):
+        out = self.run_hive('peers')
+        for part in ('--words "<their words that name it>"', '--box "<the option they picked>"', '`--restates <id>`',
+                     "A reply that doesn't name the item is not a decision"):
+            self.assertIn(part, out)
+
     def test_decide_keeps_the_text_to_one_line(self):
-        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', 'first line\nsecond line')
+        self.run_hive('decide', '--words', 'yes', '--workspace', '/work/repo', '--area', 'qa', 'first line\nsecond line')
         self.assertEqual(self.log()[-1]['text'], 'first line second line')
 
     def test_role_and_who_name_the_latest_holder(self):
@@ -649,31 +732,31 @@ class Hive(unittest.TestCase):
 
     def test_the_fold_shows_other_sessions_events_one_line_each(self):
         day = time.strftime('%m%d')
-        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'runner', 'no fourth account (work-10)', self_id='peer-0002')
+        self.run_hive('decide', '--words', 'yes', '--workspace', '/work/repo', '--area', 'runner', 'no fourth account (work-10)', self_id='peer-0002')
         self.run_hive('role', '--workspace', '/work/repo', '--area', 'runner', '--role', 'builder', self_id='peer-0002')
-        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', 'my own decision')
+        self.run_hive('decide', '--words', 'yes', '--workspace', '/work/repo', '--area', 'qa', 'my own decision')
         out = self.since()
         self.assertIn('Since you last looked', out)
         lines = [l for l in out.splitlines() if re.match(r'\d\d-\d\d \d\d:\d\d ', l)]
         self.assertEqual(len(lines), 2, out)
         self.assertRegex(lines[0], r'^\d\d-\d\d \d\d:\d\d role runner: work-bb is builder$')
-        self.assertRegex(lines[1], rf'^\d\d-\d\d \d\d:\d\d decided \[e{day}-01\] runner: no fourth account \(work-10\) \(work-bb\)$')
+        self.assertRegex(lines[1], rf'^\d\d-\d\d \d\d:\d\d decided \[e{day}-01\] runner: no fourth account \(work-10\) · said "yes" \(work-bb\)$')
         self.assertNotIn('my own decision', out, "a session's own events are not news to it")
 
     def test_the_cursor_moves_only_when_the_block_is_taken(self):
-        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', 'item one', self_id='peer-0002')
+        self.run_hive('decide', '--words', 'yes', '--workspace', '/work/repo', '--area', 'qa', 'item one', self_id='peer-0002')
         self.assertIn('item one', self.since())
         self.assertIn('item one', self.since('--take'), 'a plain look does not move the cursor')
         self.assertEqual(self.since('--take'), '', 'nothing new: no block at all')
-        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', 'item two', self_id='peer-0002')
+        self.run_hive('decide', '--words', 'yes', '--workspace', '/work/repo', '--area', 'qa', 'item two', self_id='peer-0002')
         out = self.since('--take')
         self.assertIn('item two', out)
         self.assertNotIn('item one', out)
 
     def test_the_cursor_is_per_session(self):
         far = self.elsewhere()
-        self.run_hive('decide', '--workspace', '/elsewhere', '--area', 'qa', 'far news', self_id='peer-0002')
-        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', 'near news', self_id='peer-0002')
+        self.run_hive('decide', '--words', 'yes', '--workspace', '/elsewhere', '--area', 'qa', 'far news', self_id='peer-0002')
+        self.run_hive('decide', '--words', 'yes', '--workspace', '/work/repo', '--area', 'qa', 'near news', self_id='peer-0002')
         self.since('--take')
         self.assertEqual(self.since('--take'), '')
         self.assertIn('far news', self.since('--take', who=far['sessionId']), 'another session has its own cursor')
@@ -702,9 +785,9 @@ class Hive(unittest.TestCase):
     def test_the_fold_keeps_to_this_workspace_and_takes_events_aimed_at_it(self):
         far = self.elsewhere()
         # A session elsewhere deciding something about this workspace: it shows here.
-        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'runner', 'cross-workspace yes', self_id='far-0003')
+        self.run_hive('decide', '--words', 'yes', '--workspace', '/work/repo', '--area', 'runner', 'cross-workspace yes', self_id='far-0003')
         # A session here deciding something about the other workspace: it shows there, not here.
-        self.run_hive('decide', '--workspace', '/elsewhere', '--area', 'qa', 'about elsewhere', self_id='peer-0002')
+        self.run_hive('decide', '--words', 'yes', '--workspace', '/elsewhere', '--area', 'qa', 'about elsewhere', self_id='peer-0002')
         mine = self.since()
         self.assertIn('cross-workspace yes', mine)
         self.assertNotIn('about elsewhere', mine)
@@ -764,10 +847,10 @@ class Hive(unittest.TestCase):
 
     def test_a_damaged_log_line_is_skipped_not_the_whole_log(self):
         day = time.strftime('%m%d')
-        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', 'before the damage', self_id='peer-0002')
+        self.run_hive('decide', '--words', 'yes', '--workspace', '/work/repo', '--area', 'qa', 'before the damage', self_id='peer-0002')
         with open(os.path.join(self.home, '.claude', 'session-hive', 'log.ndjson'), 'a') as f:
             f.write('{"at": 1, "dir": "out", "fro\n')
-        self.assertEqual(self.run_hive('decide', '--workspace', '/work/repo', '--area', 'qa', 'after').strip(), f'e{day}-02')
+        self.assertEqual(self.run_hive('decide', '--words', 'yes', '--workspace', '/work/repo', '--area', 'qa', 'after').strip(), f'e{day}-02')
         self.assertIn('before the damage', self.since())
 
     def test_fold_lines_stay_one_short_line(self):
@@ -920,7 +1003,7 @@ class Hive(unittest.TestCase):
         self.assertIn('/shared/vault/note.md', self.since(who='far-0003'))
 
     def test_an_unknown_self_writes_no_event(self):
-        p = subprocess.run([sys.executable, '-I', HIVE, '--self', 'nobody-here', 'decide', '--workspace', '/w', '--area', 'a', 'x'],
+        p = subprocess.run([sys.executable, '-I', HIVE, '--self', 'nobody-here', 'decide', '--words', 'yes', '--workspace', '/w', '--area', 'a', 'x'],
                            capture_output=True, text=True, env=dict(os.environ, HOME=self.home), timeout=30)
         self.assertNotEqual(p.returncode, 0)
         self.assertFalse(os.path.exists(os.path.join(self.home, '.claude', 'session-hive', 'log.ndjson')))
@@ -944,7 +1027,7 @@ class Hive(unittest.TestCase):
         self.assertIn('good news', self.run_hive('log'))
 
     def test_a_windows_workspace_path_is_read_as_its_wsl_path(self):
-        self.run_hive('decide', '--workspace', 'C:\\HQ\\vault', '--area', 'qa', 'x')
+        self.run_hive('decide', '--words', 'yes', '--workspace', 'C:\\HQ\\vault', '--area', 'qa', 'x')
         self.assertEqual(self.log()[-1]['workspace'], '/mnt/c/HQ/vault')
 
 
