@@ -4,9 +4,11 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
 #bar button:hover, .row button:hover { background: var(--vscode-toolbar-hoverBackground); }
 #bar button.on { background: var(--vscode-button-secondaryBackground); }
 .empty { color: var(--vscode-descriptionForeground); padding: 8px 2px; }
-/* The list is one grid and each row a subgrid of it: every column but the name is as wide as the
-   widest thing in it on any row (no time chips on the tab, no chip column), and the name takes the rest. */
-#list, #dismissed { display: grid; grid-template-columns: 14px minmax(80px, 1fr) auto auto auto auto auto auto auto; column-gap: 8px; }
+/* The list is one grid and each row a subgrid of it: every column is as wide as the widest thing in
+   it on any row, the name first (it gives way only when the panel is too narrow for all of them), and
+   the room left over goes to the time-chip column, between the star and the state. What a session
+   watches lies across that room and widens nothing past a short minimum (.state.wide). */
+#list, #dismissed { display: grid; grid-template-columns: 14px minmax(80px, max-content) auto auto minmax(auto, 1fr) auto auto auto auto; column-gap: 8px; }
 #list[hidden], #dismissed[hidden] { display: none; }
 #list > *, #dismissed > * { grid-column: 1 / -1; }
 .row { display: grid; grid-template-columns: subgrid; align-items: center; padding: 4px 6px; border-radius: 4px; cursor: pointer; }
@@ -39,6 +41,9 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
 .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .repo { font-size: 0.85em; color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-panel-border, #444); border-radius: 8px; padding: 0 6px; white-space: nowrap; }
 .state { font-size: 0.9em; white-space: nowrap; text-align: right; }
+/* what a session watches: it lies across the star, time-chip and state columns, takes the room the
+   other rows gave them (never less than the minimum here), and is cut off where that ends */
+.state.wide { grid-column: span 3; contain: inline-size; min-width: 20ch; overflow: hidden; text-overflow: ellipsis; }
 .state.ready { color: var(--vscode-testing-iconPassed, #73c991); font-weight: 600; }
 .state.waiting { color: var(--vscode-charts-blue, #3794ff); font-weight: 600; }
 .state.busy, .state.watching { color: var(--vscode-progressBar-background, #0e70c0); }

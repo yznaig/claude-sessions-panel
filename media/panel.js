@@ -30,8 +30,11 @@
     if (r.status === 'waiting') return 'needs you';
     return 'idle';
   }
-  // Long enough for "Poll deploy for d98af1fd"; the whole description is in the row's tooltip.
-  const WATCH_LABEL_MAX = 36;
+  // What a session watches runs across the star and time-chip columns too (a watching row has neither),
+  // and the row cuts it off where that room ends; the whole description is in the row's tooltip.
+  const WATCH_LABEL_MAX = 80;
+  // A workspace pill shows 8 characters at most, so one long folder name doesn't narrow every name.
+  const REPO_LABEL_MAX = 8;
   function clip(text, n) { return text.length > n ? text.slice(0, n - 1).trimEnd() + '…' : text; }
   function clock(ms) {
     if (!ms) return '?';
@@ -179,18 +182,23 @@
     cell.addEventListener('contextmenu', ev => { ev.preventDefault(); ev.stopPropagation(); colorMenu(r, ev.clientX, ev.clientY); });
     d.appendChild(cell);
     d.appendChild(el('span', 'name', r.name));
-    d.appendChild(el('span', 'repo', r.repo));
+    const repo = el('span', 'repo', clip(r.repo, REPO_LABEL_MAX));
+    if (r.repo.length > REPO_LABEL_MAX) repo.title = r.repo + '\n' + d.title;
+    d.appendChild(repo);
+    // A row that says what it watches gives that line the star and time-chip columns as well.
+    const watchLine = kind === 'watching' && !r.stopping && !!r.watchingFor;
     // The star: mark an idle session green to come back to it, or clear the mark. Not on running or
     // watching sessions (they turn green by themselves) or ones that need you (already blue).
-    if (!r.dismissed && !r.closed && !offline && !asleep && !r.stopping && r.status !== 'busy' && r.status !== 'watching' && r.attention !== 'waiting') {
+    if (watchLine) { /* no star, no chip: the state below spans their columns */ }
+    else if (!r.dismissed && !r.closed && !offline && !asleep && !r.stopping && r.status !== 'busy' && r.status !== 'watching' && r.attention !== 'waiting') {
       const marked = r.attention === 'ready' || r.attention === 'relayed';
       const star = el('button', 'star', marked ? '★' : '☆');
       star.title = marked ? 'Clear the green mark' : 'Mark green to come back to it';
       star.addEventListener('click', ev => { ev.stopPropagation(); post({ type: 'mark', id: r.id }); });
       d.appendChild(star);
     } else d.appendChild(el('span'));
-    d.appendChild(costChip(r));
-    const st = el('span', 'state ' + (asleep && !r.attention ? 'asleep' : kind), (r.parked ? '🔕 ' : '') + (r.keep ? '📌 ' : '') + label(r));
+    if (!watchLine) d.appendChild(costChip(r));
+    const st = el('span', 'state ' + (asleep && !r.attention ? 'asleep' : kind) + (watchLine ? ' wide' : ''), (r.parked ? '🔕 ' : '') + (r.keep ? '📌 ' : '') + label(r));
     const marks = [r.parked && 'Parked: other sessions don\'t message it', r.keep && 'Keep running: never auto-closed'].filter(Boolean);
     if (marks.length) st.title = marks.join('\n') + '\n(⋯ to change)';
     if (r.attention === 'relayed') st.title = `It sent its recap to ${r.relayedTo} this turn: answer it there. Click to open this session anyway.` + (st.title ? '\n' + st.title : '');
