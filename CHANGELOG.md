@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.26.0 — 2026-11-12
+**Notes under a session.** Right-click a session (or its ⋯) → **Add note…** and type a line, up to 200 characters, in VS Code's input box. It shows under the session's name, 📝 first, and the row grows to hold it; a long note wraps without widening any column. **Edit note…** and **Remove note** change it, and an empty answer removes it. Notes are stored like dot colors (globalState `claudeSessions.notes`): every window sees them, and they stay through sleep, Removed and restarts. The snapshot carries each row's `note`, so the read-sessions skill sees it. 116 tests.
+
 ## 0.25.1 — 2026-11-09
 **Rows keep their names.** A long `watching · …` line and a long workspace name each widened a column on every row, and the session names paid for it. Now the watching line lies across the star and time-chip columns too (a watching row has neither) and takes whatever room the row has left after the names, cut off where that ends instead of at 36 characters; it never widens a column past a short minimum. A workspace pill shows 8 characters at most (`ship-lane-12` → `ship-la…`), with the whole name on hover. Names now get their full width first, the pill sits right after the longest name, and spare room falls between the pill and the status instead of between the name and the pill.
 

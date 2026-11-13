@@ -134,6 +134,9 @@
     }
     items.push('-', { label: 'Parked (other sessions don\'t message it)', checked: !!r.parked, run: () => post({ type: 'park', id: r.id }) });
     items.push({ label: 'Dot color…', run: () => colorMenu(r, x, y) });
+    // A note of your own, shown under the row (typed in VS Code's input box).
+    if (r.note) items.push({ label: 'Edit note…', run: () => post({ type: 'editNote', id: r.id }) }, { label: 'Remove note', run: () => post({ type: 'note', id: r.id, text: '' }) });
+    else items.push({ label: 'Add note…', run: () => post({ type: 'editNote', id: r.id }) });
     items.push('-', { label: removeLabel(r), run: () => post({ type: 'dismiss', id: r.id }) });
     openMenu(x, y, items);
   }
@@ -219,6 +222,13 @@
     x.title = r.dismissed ? 'Bring back' : removeLabel(r);
     x.addEventListener('click', ev => { ev.stopPropagation(); post({ type: r.dismissed ? 'restore' : 'dismiss', id: r.id }); });
     d.appendChild(x);
+    // Your note: a line of its own under the name, as wide as the row; the row grows to hold it.
+    if (r.note) {
+      const n = el('div', 'note', '📝 ' + r.note);
+      n.title = r.note + '\n(right-click the session to edit or remove the note)';
+      d.appendChild(n);
+      d.classList.add('noted');
+    }
     d.addEventListener('click', () => post({ type: 'focus', id: r.id }));
     return d;
   }

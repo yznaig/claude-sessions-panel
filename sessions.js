@@ -32,6 +32,7 @@ const KEYS = {
   kept: 'claudeSessions.keepRunning',
   parked: 'claudeSessions.parked',
   colors: 'claudeSessions.colors',
+  notes: 'claudeSessions.notes',
 };
 // A session of this window's folder that stops while VS Code keeps running was ended on purpose and
 // leaves the saved list after this long; when VS Code itself closes, the panel is gone well before.
@@ -282,6 +283,29 @@ class Colors {
   }
 }
 
+// ---- Notes: a line of your own under a session's row, to remember what it is for --------------
+// Saved as [id, text], shared by every window and kept through sleep, Removed and restarts, like
+// colors. One line of plain text (newlines become spaces), NOTE_MAX characters at most; an empty
+// note removes it.
+const NOTE_MAX = 200;
+const cleanNote = t => (typeof t === 'string' ? t.replace(/\s+/g, ' ').trim().slice(0, NOTE_MAX) : null);
+class Notes {
+  constructor(store) { this.store = store; }
+  map() {
+    const s = this.store.get(KEYS.notes, []);
+    return new Map((Array.isArray(s) ? s : []).filter(x => Array.isArray(x) && typeof x[0] === 'string' && cleanNote(x[1])));
+  }
+  get(id) { return this.map().get(id) || ''; }
+  set(id, text) {
+    const t = cleanNote(text);
+    if (t === null) return;
+    const m = this.map();
+    m.delete(id); // re-added last, so the cap below lets go of the oldest notes first
+    if (t) m.set(id, t);
+    void this.store.update(KEYS.notes, [...m].slice(-500));
+  }
+}
+
 // ---- the list ---------------------------------------------------------------------------------
 
 class SessionList {
@@ -316,6 +340,7 @@ class SessionList {
     this.kept = new Marks(store, KEYS.kept);
     this.parked = new Marks(store, KEYS.parked);
     this.colors = new Colors(store);
+    this.notes = new Notes(store);
     this.stuck = new Map(); // pid -> when a stop of it did not take
     this.saved = new Saved(store, scope, carried, upgrade, id => this.asleep.has(id));
     this.folders = new Folders(store);
@@ -510,6 +535,7 @@ class SessionList {
       case 'park': this.parked.toggle(a.id); break;
       case 'sleep': this.stop(this.reg(a.id)); break;
       case 'color': this.colors.set(a.id, a.color); break;
+      case 'note': this.notes.set(a.id, a.text); break;
       // The star: mark an idle running session green to come back to it, or clear that mark.
       case 'mark': {
         if (!this.liveIds.has(a.id)) break;
@@ -554,7 +580,7 @@ class SessionList {
     return this.dotColor(id, this.colors.map().get(id), r ? [r.name, this.transcripts.displayName(r)] : []).color;
   }
 
-  offlineRow(e, dismissed, { kept, parked, colors }) {
+  offlineRow(e, dismissed, { kept, parked, colors, notes }) {
     const a = this.asleep.get(e.id);
     let attention = a && a.ready && !dismissed ? 'ready' : null;
     const relayedTo = attention ? this.relayOf({ sessionId: e.id, cwd: e.cwd }) : null;
@@ -566,7 +592,7 @@ class SessionList {
       keep: kept.has(e.id), stopping: false, canStop: !!a, parked: parked.has(e.id),
       ...this.dotColor(e.id, colors.get(e.id), [e.handle, this.transcripts.displayName({ sessionId: e.id, cwd: e.cwd, name: e.name })]),
       cost: attention === 'ready' ? this.transcripts.replyCost(this.transcripts.readTranscript({ sessionId: e.id, cwd: e.cwd }).reply) : null,
-      relayedTo: relayedTo || '',
+      relayedTo: relayedTo || '', note: notes.get(e.id) || '',
     };
   }
 
@@ -576,7 +602,7 @@ class SessionList {
     const shown = cwd => showAll || this.scope.shows(cwd);
     const kept = this.kept.ids();
     const colors = this.colors.map();
-    const marks = { kept, parked: this.parked.ids(), colors };
+    const marks = { kept, parked: this.parked.ids(), colors, notes: this.notes.map() };
     this.asleep.load();
     const rows = [];
     // Stopped sessions: on the saved list or in Removed.
@@ -610,6 +636,7 @@ class SessionList {
         relayedTo: relayedTo || '',
         keep: kept.has(id), stopping: !!(this.asleep.get(id) && this.asleep.get(id).pid === r.pid), canStop: this.stoppable(r),
         parked: marks.parked.has(id), ...this.dotColor(id, colors.get(id), [r.name, this.transcripts.displayName(r)]),
+        note: marks.notes.get(id) || '',
       });
     }
     // Filed sessions no list above holds (ended here, or another window's): shown from the folder's copy.
@@ -627,4 +654,4 @@ class SessionList {
   }
 }
 
-module.exports = { SessionList };
+module.exports = { SessionList, NOTE_MAX };

@@ -62,7 +62,7 @@ function readRegistry(ended) {
 
 const transcripts = require('./transcript');
 const { displayName } = transcripts;
-const { SessionList } = require('./sessions');
+const { SessionList, NOTE_MAX } = require('./sessions');
 const { windowScope } = require('./window');
 const { readAway, writeAway } = require('./away');
 const { SearchIndex, askPrompt, readAnswer } = require('./search');
@@ -234,6 +234,21 @@ class Provider {
     }
   }
 
+  // A note under a session's row (right-click → Add note…). VS Code's input box, like folder names;
+  // an empty answer removes the note, Esc leaves it as it was.
+  async editNote(id) {
+    const row = this.list.rows(true).find(r => r.id === id);
+    const text = await vscode.window.showInputBox({
+      title: `Note for "${row ? row.name : id}"`,
+      value: row ? row.note : '',
+      prompt: 'Shown under the session in the panel. Leave it empty to remove the note.',
+      placeHolder: 'What this session is for, what it waits on…',
+      validateInput: v => (v.trim().length > NOTE_MAX ? `Keep it under ${NOTE_MAX} characters (${v.trim().length} now)` : null),
+    });
+    if (text === undefined) return;
+    this.list.act({ type: 'note', id, text });
+  }
+
   // The moon (away.js): you're away for a long stretch. Clicking a session, or its star, means you're back.
   setAway(on, how) {
     try { writeAway(on, how); }
@@ -273,6 +288,8 @@ class Provider {
       case 'mark': this.back(); list.act({ type: m.type, id: m.id }); break;
       case 'ack': case 'restore': case 'keep': case 'park': list.act({ type: m.type, id: m.id }); break;
       case 'color': list.act({ type: 'color', id: m.id, color: m.color }); break;
+      case 'editNote': await this.editNote(m.id); break;
+      case 'note': list.act({ type: 'note', id: m.id, text: m.text }); break;
       case 'dismiss': await this.remove(m.id); break;
       case 'sleep': await this.sleep(m.id); break;
       case 'toggleAway': this.setAway(!readAway().away, 'moon'); break;
@@ -521,6 +538,7 @@ function writeSnapshot(rows, showAll) {
       state: r.attention || (r.closed ? 'closed' : r.status === 'offline' ? 'not running' : r.status),
       ...(r.folder ? { folder: r.folder } : {}),
       ...(r.parked ? { parked: true } : {}),
+      ...(r.note ? { note: r.note } : {}),
     })),
   };
   const text = JSON.stringify(body);

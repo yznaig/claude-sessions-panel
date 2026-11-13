@@ -135,3 +135,8 @@ h4 { margin: 10px 0 4px; font-weight: 600; color: var(--vscode-descriptionForegr
 .row.relayed { background: color-mix(in srgb, var(--vscode-charts-purple, #b180d7) 12%, transparent); }
 .dot.relayed:not(.tinted) { opacity: 1; background: var(--vscode-charts-purple, #b180d7); }
 .state.relayed { color: var(--vscode-charts-purple, #b180d7); font-weight: 600; }
+
+/* your note under a session: its own line from the name column to the row's end, wrapping; it widens
+   no column (contain), so a long note never pushes the names aside */
+.row.noted { padding-bottom: 5px; }
+.row .note { grid-column: 2 / -1; contain: inline-size; min-width: 0; margin-top: 1px; font-size: 0.88em; line-height: 1.35; color: var(--vscode-descriptionForeground); white-space: normal; overflow-wrap: anywhere; }

@@ -1053,6 +1053,43 @@ withHarness('color: every window sees it, search results carry it, and anything 
   eq(h.row('a').color, '#a1edc7', 'saved the way the palette writes it, so the menu ticks it');
 });
 
+// ---- notes under a session ------------------------------------------------------
+
+withHarness('note: added by right-click, it stays through reload, restart, sleep and Removed; empty removes it', async h => {
+  const a = h.session('a'); h.session('b');
+  h.start();
+  eq(h.row('a').note, '');
+  h.answers.push('  waiting on\nreview  '); await h.send({ type: 'editNote', id: a.id });
+  eq(h.row('a').note, 'waiting on review', 'one line, trimmed'); eq(h.row('b').note, '');
+  eq(h.snapshot().rows.find(r => r.id === a.id).note, 'waiting on review', 'read-sessions sees it');
+  eq('note' in h.snapshot().rows.find(r => r.id === h.id('b')), false);
+  h.reload(); eq(h.row('a').note, 'waiting on review');
+  await h.send({ type: 'dismiss', id: a.id }); await a.gone(); h.step();
+  eq(h.row('a').status, 'asleep'); eq(h.row('a').dismissed, true); eq(h.row('a').note, 'waiting on review');
+  await h.send({ type: 'restore', id: a.id }); eq(h.row('a').note, 'waiting on review');
+  h.step(31e3); h.restart(); eq(h.row('a').note, 'waiting on review');
+  h.answers.push(undefined); await h.send({ type: 'editNote', id: a.id });
+  eq(h.row('a').note, 'waiting on review', 'Esc leaves it as it was');
+  h.answers.push('pricing answered'); await h.send({ type: 'editNote', id: a.id });
+  eq(h.row('a').note, 'pricing answered');
+  await h.send({ type: 'note', id: a.id, text: '' });
+  eq(h.row('a').note, '', 'Remove note');
+});
+
+withHarness('note: every window sees it, it is capped at 200 characters, and anything not text is refused', async h => {
+  const a = h.session('a');
+  h.start();
+  h.globalState.update('claudeSessions.notes', [[a.id, 'from another window']]);
+  await h.send({ type: 'toggleDismissed' }); // another window's change, seen in the next update
+  eq(h.row('a').note, 'from another window');
+  for (const bad of [42, {}, null, ['x']]) {
+    await h.send({ type: 'note', id: a.id, text: bad });
+    eq(h.row('a').note, 'from another window', 'refused: ' + JSON.stringify(bad));
+  }
+  await h.send({ type: 'note', id: a.id, text: 'x'.repeat(250) });
+  eq(h.row('a').note.length, 200);
+});
+
 // ---- usage view ---------------------------------------------------------------
 
 test('usage: a 429 reads as rate limited, not failed, for Claude and Codex logins', async () => {
