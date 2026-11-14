@@ -375,12 +375,14 @@ def cmd_peers(a):
                            f"for {r.get('area')}. Take it first: `{role_command(r)}`; you owe "
                            f"{parent.get('parent')} no debrief.")
         elif parent and parent.get('kind') == 'sit-down':
-            out.append(f"You are a sit-down sub-session of **{parent.get('parent')}**: the user works in you. When "
-                       "its end goal is done (the brief's check passes, or the user says they are done), "
+            out.append(f"You are a sit-down sub-session of **{parent.get('parent')}**: the user works in you. Time "
+                       "without the user is no reason to fold back. When your brief's end goal is done (its check "
+                       "passes, or the user says they are done), "
                        + debrief_ask(parent.get('name') or me.get('name'), parent.get('parent'), parent.get('route'), os.path.abspath(__file__))
-                       + ", then tell the user and offer to close. Time without the user is no reason to fold back.")
+                       + ", then tell the user and offer to close.")
         elif parent:
-            out.append(f"You are a sub-session of **{parent.get('parent')}**. When your brief is done, "
+            kind = 'an errand sub-session' if parent.get('kind') == 'errand' else 'a sub-session'
+            out.append(f"You are {kind} of **{parent.get('parent')}**. When your brief is done, "
                        + debrief_ask(parent.get('name') or me.get('name'), parent.get('parent'), parent.get('route'), os.path.abspath(__file__))
                        + ", then tell the user and offer to close.")
         for m in moved.get(me.get('name'), [])[-3:]:
@@ -693,9 +695,9 @@ def start_child(me, name, brief, unattended=False, successor=False, kind=None):
                 opening = (f"You are **{name}**, a sit-down sub-session that {my_name} started {how}: the user works "
                            "in this session with you. Do the brief's prep on your own first (reads, drafts, renders), "
                            "then greet the user in two lines (what is ready, what you need from them) and wait for "
-                           "them. When its end goal is done (the brief's check passes, or the user says they are "
-                           "done), file the results in the area's files, then " + debrief_ask(name, my_name, route, script)
-                           + ". Time without the user is no reason to fold back: wait for them. ")
+                           "them; time without the user is no reason to fold back. When the brief's end goal is done "
+                           "(its check passes, or the user says they are done), file the results in the area's files, "
+                           "then " + debrief_ask(name, my_name, route, script) + ". ")
             else:
                 opening = (f"You are **{name}**, an errand sub-session that {my_name} started {how}.\n"
                            "When the brief below is done, " + debrief_ask(name, my_name, route, script) + ". ")
@@ -723,6 +725,8 @@ def start_child(me, name, brief, unattended=False, successor=False, kind=None):
             kid['bgId'] = bg_id
         save_children(kids + [kid])
     where, note, the_id, message_as = 'background', None, kid.get('bgId'), None
+    if kind == 'sit-down' and since is not None:
+        note = 'the user is away (the moon), so the sit-down started in the background; it waits in their session list'
     if tab:
         try:
             took, session_id, note = open_tab(kid['token'], name, cwd, header + brief, my_name)
@@ -938,19 +942,21 @@ def cmd_pickup(a):
 
 
 def cmd_spawn(a):
+    def answer(r):
+        print(json.dumps(r))
+        if r.get('test'):   # no kind named: the verb test, readable, for the session to decide with
+            print('spawn needs --kind errand or --kind sit-down. The verb test:\n' + '\n'.join(r['test']), file=sys.stderr)
+        return 0 if r['action'] == 'started' else 1
+    if not a.successor and a.kind not in KINDS:   # first, so every other refusal comes with a kind already chosen
+        return answer({'action': 'refused', 'reason': 'name the kind: --kind errand or --kind sit-down',
+                       'test': list(VERB_TEST)})
     me = find_self(registry(), a.self)
     if not me:
-        print(json.dumps({'action': 'refused', 'reason': 'this session is not in the registry'}))
-        return 1
+        return answer({'action': 'refused', 'reason': 'this session is not in the registry'})
     brief = sys.stdin.read().strip()
     if not brief:
-        print(json.dumps({'action': 'refused', 'reason': 'no brief on stdin'}))
-        return 1
-    r = start_child(me, a.name, brief, unattended=a.unattended, successor=a.successor, kind=a.kind)
-    print(json.dumps(r))
-    if r.get('test'):   # no kind named: the verb test, readable, for the session to decide with
-        print('spawn needs --kind errand or --kind sit-down. The verb test:\n' + '\n'.join(r['test']), file=sys.stderr)
-    return 0 if r['action'] == 'started' else 1
+        return answer({'action': 'refused', 'reason': 'no brief on stdin'})
+    return answer(start_child(me, a.name, brief, unattended=a.unattended, successor=a.successor, kind=a.kind))
 
 
 def cmd_log(a):

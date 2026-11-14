@@ -317,9 +317,9 @@ class Hive(unittest.TestCase):
         self.assertIn('the user works in this session with you', header)
         self.assertIn("prep on your own first", header)
         self.assertIn('wait for them', header)
-        self.assertIn("When its end goal is done (the brief's check passes, or the user says they are done)", header)
+        self.assertIn("When the brief's end goal is done (its check passes, or the user says they are done)", header)
         self.assertIn('Debrief from sub-session prototypes', header)
-        self.assertIn('Time without the user is no reason to fold back', header)
+        self.assertIn('time without the user is no reason to fold back', header)
         self.assertIn('You cannot start sub-sessions of your own', header)
         self.assertEqual(self.children_file()[0]['kind'], 'sit-down')
         spawned = [json.loads(l) for l in open(os.path.join(self.home, '.claude', 'session-hive', 'log.ndjson'))
@@ -333,7 +333,7 @@ class Hive(unittest.TestCase):
         self.assertIn('sit-down sub-session of work-aa', self.run_hive('peers'))
         mine = self.run_hive('peers', self_id='sit-0008')
         self.assertIn('You are a sit-down sub-session of **work-aa**: the user works in you', mine)
-        self.assertIn('When its end goal is done', mine)
+        self.assertIn("When your brief's end goal is done", mine)
 
     def test_an_errands_startup_list_reads_as_before(self):
         self.spawn('notice drafts')
@@ -341,8 +341,13 @@ class Hive(unittest.TestCase):
         self.addCleanup(lambda: (p.kill(), p.wait()))
         self.register(p.pid, 'kid-0008', 'notice-drafts', '/work/repo')
         self.assertIn('errand sub-session of work-aa', self.run_hive('peers'))
-        self.assertIn('You are a sub-session of **work-aa**. When your brief is done',
+        self.assertIn('You are an errand sub-session of **work-aa**. When your brief is done',
                       self.run_hive('peers', self_id='kid-0008'))
+
+    def test_a_spawn_with_no_kind_and_no_brief_still_prints_the_verb_test(self):
+        r, p = self.spawn('notice drafts', 'no-kind', brief='', full=True)
+        self.assertIn('--kind errand or --kind sit-down', r['reason'])
+        self.assertIn('The verb test', p.stderr)
 
     # --- sub-sessions in a VS Code tab ---
 
@@ -501,6 +506,7 @@ class Hive(unittest.TestCase):
         r = self.spawn('desk-next', '--successor')
         self.assertEqual(r['where'], 'background')
         self.assertNotIn('note', r)
+        self.assertEqual(os.listdir(self.spawn_dir) if os.path.isdir(self.spawn_dir) else [], [], 'no request left')
 
     def test_a_sit_down_while_the_user_is_away_starts_in_the_background(self):
         self.tab_setup()
@@ -508,8 +514,9 @@ class Hive(unittest.TestCase):
         start = time.time()
         r = self.spawn('notice drafts')
         self.assertEqual((r['where'], r['kind']), ('background', 'sit-down'))
-        self.assertNotIn('note', r)
+        self.assertIn('the user is away', r['note'], 'the parent can tell the user why it is not a tab')
         self.assertLess(time.time() - start, 5, 'no wait for a tab nobody is at')
+        self.assertEqual(os.listdir(self.spawn_dir) if os.path.isdir(self.spawn_dir) else [], [], 'no request left')
 
     # --- a watching background session opened in VS Code ---
 
