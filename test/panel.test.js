@@ -1251,13 +1251,17 @@ withHarness('ready to close: survives your prompt and a hive message; new work c
   h.start();
   await turn(h, s, 's'); h.advance(60e3); h.hiveSent('s', 'Desk'); h.hiveMark('s', 'done'); s.set('idle'); h.step();
   eq(h.row('s').attention, 'closable');
-  // You ask it something: running while it answers, red again after.
+  same(h.takeSounds(), [], 'the turn that sent the debrief is quiet'); eq(h.panel.badge, undefined);
+  // You ask it something: running while it answers, red again after; its answer sounds and counts like green.
   h.advance(60e3); await turn(h, s, 's'); eq(h.row('s').status, 'busy'); eq(h.row('s').attention, null);
   h.advance(60e3); s.set('idle'); h.step();
-  eq(h.row('s').attention, 'closable', 'conversation does not clear it'); same(h.takeSounds(), []);
-  // Another session's message wakes it; it answers.
+  eq(h.row('s').attention, 'closable', 'conversation does not clear it'); eq(h.row('s').answered, true);
+  same(h.takeSounds(), ['ready'], 'answering your prompt plays the ready sound');
+  eq(h.panel.badge.value, 1, 'and counts on the badge, the row still red');
+  // Another session's message wakes it; it answers: red, quiet, off the badge.
   h.advance(60e3); await turn(h, s, 's', L.peer('one more thing?', h.now)); h.advance(60e3); s.set('idle'); h.step();
-  eq(h.row('s').attention, 'closable');
+  eq(h.row('s').attention, 'closable'); eq(h.row('s').answered, false);
+  same(h.takeSounds(), []); eq(h.panel.badge, undefined);
   // It edits a file (or commits, or starts a background task): the mark is cleared, its reply is yours.
   h.advance(60e3); await turn(h, s, 's'); h.hiveMark('s', 'cleared', { by: 'an edit of /w/a.md', was: 'done' });
   h.advance(60e3); s.set('idle'); h.step();

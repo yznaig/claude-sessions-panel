@@ -457,8 +457,9 @@ class Provider {
     const live = rows.filter(r => !r.dismissed);
     writeSnapshot(live, this.showAll);
     // A filed session counts only when it needs you; its ready shows as a dot on its folder's tab.
-    // One that reported to the Desk is answered there, so it doesn't count either.
-    const needing = live.filter(r => r.attention === 'waiting' || (r.attention === 'ready' && !r.folder)).length;
+    // One that reported to the Desk is answered there, so it doesn't count either. A red (ready to
+    // close) or paused one answering your own prompt counts like green.
+    const needing = live.filter(r => r.attention === 'waiting' || ((r.attention === 'ready' || r.answered) && !r.folder)).length;
     if (this.viewFolder && !folders.includes(this.viewFolder)) this.showFolder('');
     if (this.view) {
       this.view.badge = needing ? { value: needing, tooltip: `${needing} Claude session${needing === 1 ? '' : 's'} need${needing === 1 ? 's' : ''} you` } : undefined;

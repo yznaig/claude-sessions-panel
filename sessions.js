@@ -422,8 +422,9 @@ class SessionList {
         this.attention.set(id, 'ready');
         this.restore(id);
         // A filed session's ready is a quiet dot on its tab; one that reported to the Desk, or is
-        // ready to close or paused, is quiet too.
-        if (!this.folders.of(id) && this.scope.shows(r.cwd) && !this.relayOf(r) && !this.markOf(r)) sounds.push('ready');
+        // ready to close or paused, is quiet too, unless it is answering your own prompt.
+        const mark = this.markOf(r);
+        if (!this.folders.of(id) && this.scope.shows(r.cwd) && !this.relayOf(r) && (!mark || this.answersYou(r, mark))) sounds.push('ready');
       }
       this.prevStatus.set(id, status);
     }
@@ -478,6 +479,14 @@ class SessionList {
   // How a row's attention reads with its mark: red 'closable' or 'paused' in place of ready, recap at
   // the Desk or idle, only while the session is idle (a running or watching session shows that, and one
   // that needs you stays blue).
+  // A marked session whose latest turn was your prompt, given after the mark was set: its reply is for
+  // you, so it sounds and counts on the badge like green, while the row stays red (or paused). The turn
+  // that sent the debrief, and turns another session's message started, stay quiet.
+  answersYou(r, mark) {
+    const t = this.transcripts.readTranscript(r);
+    return !!mark && !!t.turnAt && !t.turnByPeer && t.turnAt > mark.at;
+  }
+
   marked(attention, status, mark) {
     if (!mark || attention === 'waiting' || (status !== 'idle' && status !== 'asleep')) return null;
     return mark.kind === 'done' ? 'closable' : 'paused';
@@ -641,6 +650,8 @@ class SessionList {
       const mark = status === 'idle' && !t0.closed ? this.markOf(r) : null;
       const relayedTo = attention === 'ready' && !mark ? this.relayOf(r) : null;
       if (relayedTo) attention = 'relayed';
+      // Red answering your prompt: counts on the badge like green, though the row stays red.
+      const answered = attention === 'ready' && !!mark && this.answersYou(r, mark) && !this.relayOf(r);
       attention = this.marked(attention, status, mark) || attention;
       const dismissed = this.removed.has(id);
       if (!shown(r.cwd)) continue;
@@ -655,6 +666,7 @@ class SessionList {
         watchingFor: status === 'watching' ? this.transcripts.watchingFor(r) : '',
         cost: attention === 'ready' ? this.transcripts.replyCost(t.reply) : null,
         relayedTo: relayedTo || '', pausedFor: attention === 'paused' ? mark.what : '',
+        answered: answered && (attention === 'closable' || attention === 'paused'),
         keep: kept.has(id), stopping: !!(this.asleep.get(id) && this.asleep.get(id).pid === r.pid), canStop: this.stoppable(r),
         parked: marks.parked.has(id), ...this.dotColor(id, colors.get(id), [r.name, this.transcripts.displayName(r)]),
         note: marks.notes.get(id) || '',

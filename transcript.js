@@ -29,7 +29,7 @@ const os = require('os');
 // Each transcript is read once, then only the bytes added since.
 
 const transcriptCache = new Map(); // sessionId -> entry
-const FRESH = { offset: 0, tail: '', custom: null, ai: null, checking: false, closed: false, closedAt: 0, reply: '', pending: null, turnAt: 0 };
+const FRESH = { offset: 0, tail: '', custom: null, ai: null, checking: false, closed: false, closedAt: 0, reply: '', pending: null, turnAt: 0, turnByPeer: false };
 
 // Your time for a reply: reading at WORDS_PER_MIN, plus MIN_PER_DECISION for each numbered item.
 const WORDS_PER_MIN = 230;
@@ -103,7 +103,7 @@ function scanLine(entry, line) {
   const blocks = blocksOf(r);
   if (r.type === 'user') {
     // Another session's message starts a turn too (Claude Code records it as a meta line).
-    if (r.isMeta) { if (r.origin && r.origin.kind === 'peer') entry.turnAt = Date.parse(r.timestamp) || entry.turnAt; return; }
+    if (r.isMeta) { if (r.origin && r.origin.kind === 'peer') { entry.turnAt = Date.parse(r.timestamp) || entry.turnAt; entry.turnByPeer = true; } return; }
     const texts = blocks.filter(b => b && b.type === 'text').map(b => String(b.text || '').trim()).filter(Boolean);
     const text = texts.join(' ');
     // A background command finished (or failed, or was stopped).
@@ -116,6 +116,7 @@ function scanLine(entry, line) {
     const typed = texts.some(t => !t.startsWith('<') || t.indexOf('<command-name>') >= 0);
     if (!typed) return;                                                 // a reminder or notice, not the person
     entry.turnAt = Date.parse(r.timestamp) || entry.turnAt;
+    entry.turnByPeer = false;
     entry.checking = text.indexOf('<command-name>/' + CLOSE_SKILL) >= 0;
     entry.closed = false;
     entry.closedAt = 0;
