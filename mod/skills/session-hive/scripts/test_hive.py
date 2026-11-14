@@ -259,23 +259,96 @@ class Hive(unittest.TestCase):
 
     # --- sub-sessions ---
 
-    def spawn(self, name, *flags, who='me-0001', brief='Dig into the delay-notice drafts.'):
-        return json.loads(self.run_hive('spawn', '--name', name, *flags, stdin=brief, self_id=who, ok=False))
+    default_kind = 'errand'   # tab tests switch to sit-down: only a sit-down asks for a tab
+
+    def kind_flags(self, flags):
+        return flags if '--successor' in flags or '--kind' in flags or 'no-kind' in flags else (*flags, '--kind', self.default_kind)
+
+    def spawn(self, name, *flags, who='me-0001', brief='Dig into the delay-notice drafts.', full=False):
+        flags = tuple(f for f in self.kind_flags(flags) if f != 'no-kind')
+        p = self.run_hive('spawn', '--name', name, *flags, stdin=brief, self_id=who, ok=False, full=True)
+        return (json.loads(p.stdout), p) if full else json.loads(p.stdout)
 
     def test_a_sub_session_starts_in_the_background_knowing_its_parent(self):
         r = self.spawn('notice drafts')
-        self.assertEqual(r, {'action': 'started', 'name': 'notice-drafts', 'where': 'background', 'id': 'abcd1234'})
+        self.assertEqual(r, {'action': 'started', 'name': 'notice-drafts', 'where': 'background', 'id': 'abcd1234',
+                             'kind': 'errand'})
         argv = self.spawns()[0]['argv']
         self.assertEqual(argv[:4], ['--bg', '-n', 'notice-drafts', '--'])
-        self.assertIn("a sub-session that work-aa started with the user's yes", argv[4])
+        self.assertIn("an errand sub-session that work-aa started with the user's yes", argv[4])
         self.assertIn('Debrief from sub-session notice-drafts', argv[4])
         self.assertIn('Dig into the delay-notice drafts.', argv[4])
-        self.assertIn('work-aa started sub-session notice-drafts', self.run_hive('log'))
+        self.assertIn('work-aa started sub-session notice-drafts: errand: Dig into', self.run_hive('log'))
+
+    # --- the kind: errand or sit-down ---
+
+    def test_a_spawn_without_a_kind_is_refused_with_the_verb_test(self):
+        r, p = self.spawn('notice drafts', 'no-kind', full=True)
+        self.assertEqual(r['action'], 'refused')
+        self.assertIn('--kind errand or --kind sit-down', r['reason'])
+        self.assertEqual(len(r['test']), 3)
+        self.assertEqual(p.returncode, 1)
+        said = p.stderr.splitlines()
+        self.assertEqual(len(said), 4, 'a heading and the three-line verb test')
+        self.assertIn('the user does the verb', said[1])
+        self.assertIn('the session does the verb', said[2])
+        self.assertIn('Still unclear', said[3])
+        self.assertEqual(self.spawns(), [], 'nothing started')
+        self.assertNotIn('notice-drafts', self.run_hive('log'))
+
+    def test_a_kind_outside_the_two_is_refused(self):
+        p = self.run_hive('spawn', '--name', 'x', '--kind', 'huddle', stdin='Brief.', ok=False, full=True)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertEqual(self.spawns(), [])
+
+    def test_a_successor_needs_no_kind_and_records_none(self):
+        self.run_hive('role', *self.DESK_ROLE)
+        r = self.spawn('desk-next', '--successor', '--kind', 'sit-down')
+        self.assertEqual(r['action'], 'started')
+        self.assertNotIn('kind', r)
+        self.assertIsNone(self.children_file()[0]['kind'])
+        self.assertNotIn('sit-down', self.spawns()[0]['argv'][4].split('## Brief')[0])
+
+    def test_a_sit_down_is_told_to_prep_wait_for_the_user_and_fold_back_at_its_end_goal(self):
+        r = self.spawn('prototypes', '--kind', 'sit-down', brief='Pick rounds. End goal: picks recorded.')
+        self.assertEqual((r['where'], r['kind']), ('background', 'sit-down'))
+        header = self.spawns()[0]['argv'][4].split('## Brief')[0]
+        self.assertIn("a sit-down sub-session that work-aa started with the user's yes", header)
+        self.assertIn('the user works in this session with you', header)
+        self.assertIn("prep on your own first", header)
+        self.assertIn('wait for them', header)
+        self.assertIn("When its end goal is done (the brief's check passes, or the user says they are done)", header)
+        self.assertIn('Debrief from sub-session prototypes', header)
+        self.assertIn('Time without the user is no reason to fold back', header)
+        self.assertIn('You cannot start sub-sessions of your own', header)
+        self.assertEqual(self.children_file()[0]['kind'], 'sit-down')
+        spawned = [json.loads(l) for l in open(os.path.join(self.home, '.claude', 'session-hive', 'log.ndjson'))
+                   if '"spawn"' in l]
+        self.assertEqual(spawned[0]['kind'], 'sit-down', 'the log event carries the kind for desk.py and the panel')
+        self.assertIn('started sub-session prototypes: sit-down: Pick rounds', self.run_hive('log'))
+        # The startup lists show the kind: the parent's, and the sit-down's own (its fold-back line).
+        p = subprocess.Popen(['sleep', '60'])
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        self.register(p.pid, 'sit-0008', 'prototypes', '/work/repo')
+        self.assertIn('sit-down sub-session of work-aa', self.run_hive('peers'))
+        mine = self.run_hive('peers', self_id='sit-0008')
+        self.assertIn('You are a sit-down sub-session of **work-aa**: the user works in you', mine)
+        self.assertIn('When its end goal is done', mine)
+
+    def test_an_errands_startup_list_reads_as_before(self):
+        self.spawn('notice drafts')
+        p = subprocess.Popen(['sleep', '60'])
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        self.register(p.pid, 'kid-0008', 'notice-drafts', '/work/repo')
+        self.assertIn('errand sub-session of work-aa', self.run_hive('peers'))
+        self.assertIn('You are a sub-session of **work-aa**. When your brief is done',
+                      self.run_hive('peers', self_id='kid-0008'))
 
     # --- sub-sessions in a VS Code tab ---
 
     def tab_setup(self, folder=None):
         """A real folder for this session, and a live panel whose window has `folder` (default: it) open."""
+        self.default_kind = 'sit-down'
         self.repo = tempfile.mkdtemp()
         self.me = self.register(os.getpid(), 'me-0001', 'work-aa', self.repo)
         panels = os.path.join(self.home, '.claude', 'session-hive', 'panels')
@@ -314,10 +387,10 @@ class Hive(unittest.TestCase):
         r = self.spawn('notice drafts')
         t.join()
         self.assertEqual(r, {'action': 'started', 'name': 'notice-drafts', 'where': 'tab', 'id': 'tab-0009',
-                             'messageAs': 'repo-3'})
+                             'messageAs': 'repo-3', 'kind': 'sit-down'})
         self.assertEqual(self.spawns(), [], 'no background session')
         self.assertEqual(got[0]['action'], 'submit')
-        self.assertIn("a sub-session that work-aa started with the user's yes", got[0]['text'])
+        self.assertIn("a sit-down sub-session that work-aa started with the user's yes", got[0]['text'])
         self.assertIn('Dig into the delay-notice drafts.', got[0]['text'])
         with open(os.path.join(self.home, '.claude', 'session-hive', 'children.json')) as f:
             kid = json.load(f)[-1]
@@ -350,7 +423,8 @@ class Hive(unittest.TestCase):
         import signal
         self.tab_setup()
         env = dict(os.environ, HOME=self.home, HIVE_CLAUDE=self.fake_claude())
-        p = subprocess.Popen([sys.executable, '-I', HIVE, '--self', 'me-0001', 'spawn', '--name', 'cut-short'],
+        p = subprocess.Popen([sys.executable, '-I', HIVE, '--self', 'me-0001', 'spawn', '--name', 'cut-short',
+                              '--kind', 'sit-down'],
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
         p.stdin.write('Brief.'); p.stdin.close()
         end = time.time() + 5
@@ -408,8 +482,34 @@ class Hive(unittest.TestCase):
         self.assertEqual(json.loads(self.run_hive('pickup', '--token', '../children'))['action'], 'none')
 
     def spawn_quick(self, name):
-        return json.loads(self.run_hive('spawn', '--name', name, stdin='Dig into the delay-notice drafts.', ok=False,
+        return json.loads(self.run_hive('spawn', '--name', name, *self.kind_flags(()),
+                                        stdin='Dig into the delay-notice drafts.', ok=False,
                                         env_extra={'HIVE_TAB_CLAIM_SECONDS': '1', 'HIVE_TAB_PICKUP_SECONDS': '1'}))
+
+    def test_an_errand_never_asks_the_panel_for_a_tab(self):
+        self.tab_setup()
+        start = time.time()
+        r = self.spawn('notice drafts', '--kind', 'errand')
+        self.assertEqual((r['where'], r['kind']), ('background', 'errand'))
+        self.assertNotIn('note', r)
+        self.assertLess(time.time() - start, 5, 'no wait for a tab')
+        self.assertEqual(os.listdir(self.spawn_dir) if os.path.isdir(self.spawn_dir) else [], [], 'no request left')
+
+    def test_a_successor_never_asks_the_panel_for_a_tab(self):
+        self.tab_setup()
+        self.run_hive('role', *self.DESK_ROLE)
+        r = self.spawn('desk-next', '--successor')
+        self.assertEqual(r['where'], 'background')
+        self.assertNotIn('note', r)
+
+    def test_a_sit_down_while_the_user_is_away_starts_in_the_background(self):
+        self.tab_setup()
+        self.set_away()
+        start = time.time()
+        r = self.spawn('notice drafts')
+        self.assertEqual((r['where'], r['kind']), ('background', 'sit-down'))
+        self.assertNotIn('note', r)
+        self.assertLess(time.time() - start, 5, 'no wait for a tab nobody is at')
 
     # --- a watching background session opened in VS Code ---
 
@@ -853,7 +953,7 @@ class Hive(unittest.TestCase):
         self.assertRegex(out, r'message work-bb → work-cc: FYI: main fails the drift check')
         self.assertNotIn('A question for you', out, 'a message to this session reaches it anyway')
         self.assertRegex(out, r'edit work-bb is about to edit /work/repo/docs/asks.md \(held by work-aa\)')
-        self.assertRegex(out, r'spawn work-bb started notes: Dig into')
+        self.assertRegex(out, r'spawn work-bb started notes: errand: Dig into')
 
     def test_a_note_goes_to_the_log_and_the_fold(self):
         self.run_hive('note', 'main fails the drift check', self_id='peer-0002')
@@ -1187,11 +1287,15 @@ class Hive(unittest.TestCase):
         self.assertEqual(self.since(), '')
 
     def test_a_sub_session_is_told_the_check_the_paused_form_and_done(self):
-        self.run_hive('spawn', '--name', 'notice-drafts', stdin='Draft the notices.', env_extra={'HIVE_SPAWN': 'bg'})
-        prompt = self.spawns()[-1]['argv'][-1]
-        self.assertIn('refused while a background task you started is still open', prompt)
-        self.assertIn('`Paused from sub-session notice-drafts: waiting on <what>`', prompt)
-        self.assertRegex(prompt, r'hive\.py done`')
+        for kind in ('errand', 'sit-down'):
+            self.run_hive('spawn', '--name', f'notice-{kind}', '--kind', kind, stdin='Draft the notices.',
+                          env_extra={'HIVE_SPAWN': 'bg'})
+        prompts = [s['argv'][-1] for s in self.spawns()]
+        self.assertEqual(len(prompts), 2)
+        for kind, prompt in zip(('errand', 'sit-down'), prompts):
+            self.assertIn('refused while a background task you started is still open', prompt)
+            self.assertIn(f'`Paused from sub-session notice-{kind}: waiting on <what>`', prompt)
+            self.assertRegex(prompt, r'hive\.py done`')
 
 
 if __name__ == '__main__':
