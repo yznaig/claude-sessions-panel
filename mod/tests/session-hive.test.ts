@@ -6,7 +6,7 @@ import { expect, mock, test } from 'claude-code/testing'
 type Call = { argv: readonly string[]; stdin: string }
 
 function world(on: any, answer: (argv: readonly string[]) => { exitCode?: number; stdout?: string }) {
-  const w = { calls: [] as Call[], received: [] as string[], submitted: [] as { text: string; context?: readonly string[] }[], failSubmit: false, tokens: 50000, usage: 20, edits: [] as string[] }
+  const w = { calls: [] as Call[], received: [] as string[], submitted: [] as { text: string; context?: readonly string[] }[], failSubmit: false, tokens: 50000, usage: 20, edits: [] as string[], sends: 0, undelivered: '' }
   on('session.id', () => ({ value: 's1' }))
   on('session.cwd', () => ({ value: '/work/repo' }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: w.tokens, window: 1000000 }, rateLimits: [{ kind: 'five_hour', percentUsed: w.usage }, { kind: 'seven_day', percentUsed: 88 }] } }))
@@ -19,7 +19,7 @@ function world(on: any, answer: (argv: readonly string[]) => { exitCode?: number
   on('session.receive', (_: unknown, e: { text: string }) => { w.received.push(e.text); return { text: e.text } })
   on('prompt.submit', (_: unknown, e: { text: string; context?: readonly string[] }) => { if (w.failSubmit) throw new Error('refused'); w.submitted.push({ text: e.text, context: e.context }); return { text: e.text, context: e.context } })
   on('prompt.context', (_: unknown, e: { blocks: readonly unknown[] }) => ({ blocks: e.blocks }))
-  on('session.send', () => ({ isDelivered: true }))
+  on('session.send', () => (w.undelivered ? { isDelivered: false, reason: w.undelivered } : (w.sends++, { isDelivered: true })))
   on('ui.log', () => ({ value: undefined }))
   return w
 }
@@ -290,4 +290,54 @@ test('a VS Code session with no note left for it asks nothing', async ($, on) =>
   await $.session.start({ cwd: '/work/repo', surface: null, isInteractive: false })
   expect(w.calls.filter(c => sub(c.argv) === 'resumed')).toEqual([])
   expect(w.submitted).toEqual([])
+})
+
+// Ready to close: a final debrief is checked for open background tasks before it goes; new work clears the mark.
+
+const DEBRIEF_TEXT = 'Debrief from sub-session ship-3: PR 712 merged, notes in docs/ship.md'
+
+test('a final debrief hive.py refuses is not sent, and the session reads why', async ($, on) => {
+  const w = world(on, argv => ({ stdout: sub(argv) === 'check' ? JSON.stringify({ action: 'refuse', message: '[session hive] Not sent: 1 background task is still open: Bash: Poll deploy' }) : '' }))
+  const r = await $.session.send({ to: 'desk-4', text: DEBRIEF_TEXT, origin: { kind: 'model' } })
+  expect(r).toMatchObject({ isDelivered: false, reason: expect.stringContaining('Poll deploy') })
+  expect(w.sends).toBe(0)
+  expect(w.calls.map(c => sub(c.argv))).toEqual(['check'])
+  expect(w.calls[0]!.stdin).toBe(DEBRIEF_TEXT)
+})
+
+test('a final debrief hive.py allows is sent and logged as sent, which marks it', async ($, on) => {
+  const w = world(on, argv => ({ stdout: sub(argv) === 'check' ? JSON.stringify({ action: 'allow' }) : '' }))
+  const r = await $.session.send({ to: 'desk-4', text: DEBRIEF_TEXT, origin: { kind: 'model' } })
+  expect(r.isDelivered).toBe(true)
+  expect(w.calls.map(c => sub(c.argv))).toEqual(['check', 'sent'])
+  expect(w.calls[1]!.argv).not.toContain('--undelivered')
+})
+
+test('a debrief whose check failed still goes; one that was not delivered is logged as such', async ($, on) => {
+  const w = world(on, argv => (sub(argv) === 'check' ? { exitCode: 1 } : { stdout: '' }))
+  w.undelivered = 'nobody by that name'
+  const r = await $.session.send({ to: 'desk-9', text: DEBRIEF_TEXT, origin: { kind: 'model' } })
+  expect(r).toMatchObject({ isDelivered: false, reason: 'nobody by that name' })
+  expect(w.calls.map(c => sub(c.argv))).toEqual(['check', 'sent'])
+  expect(w.calls[1]!.argv).toContain('--undelivered')
+})
+
+test('a question or progress note to the Desk is not checked', async ($, on) => {
+  const w = world(on, () => ({ stdout: '' }))
+  await $.session.send({ to: 'desk-4', text: 'Question: merge 712 before 713?', origin: { kind: 'model' } })
+  await $.session.send({ to: 'desk-4', text: '[keep going] Debrief from sub-session ship-3: 712 merged, 713 next', origin: { kind: 'model' } })
+  expect(w.calls.map(c => sub(c.argv))).toEqual(['sent', 'sent'])
+})
+
+test('a background command, a commit, a PR and a Monitor or Agent are new work; a plain command is not', async ($, on) => {
+  const w = world(on, () => ({ stdout: '' }))
+  await $.tool.call({ tool: 'Bash', command: 'ls' })
+  await $.tool.call({ tool: 'Bash', command: 'npm test', description: 'Run the tests', run_in_background: true })
+  await $.tool.call({ tool: 'Bash', command: 'git -C /work/repo commit -m x' })
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --draft' })
+  await $.tool.call({ tool: 'Monitor', command: 'tail -f x', description: 'watch' } as any)
+  await $.tool.call({ tool: 'Agent', description: 'review', prompt: 'x' } as any)
+  const works = w.calls.filter(c => sub(c.argv) === 'work').map(c => c.argv[c.argv.length - 1])
+  expect(works).toEqual(['a background command: Run the tests', 'git -C /work/repo commit', 'gh pr create', 'a background Monitor', 'a background Agent'])
+  expect(w.edits).toEqual(['Bash', 'Bash', 'Bash', 'Bash', 'Monitor', 'Agent'])
 })

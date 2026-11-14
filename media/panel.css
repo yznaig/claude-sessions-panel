@@ -136,6 +136,14 @@ h4 { margin: 10px 0 4px; font-weight: 600; color: var(--vscode-descriptionForegr
 .dot.relayed:not(.tinted) { opacity: 1; background: var(--vscode-charts-purple, #b180d7); }
 .state.relayed { color: var(--vscode-charts-purple, #b180d7); font-weight: 600; }
 
+/* ready to close: a sub-session's checked final debrief, nothing running and no work since */
+.row.closable { background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 12%, transparent); }
+.dot.closable:not(.tinted) { opacity: 1; background: var(--vscode-charts-red, #f14c4c); }
+.state.closable { color: var(--vscode-charts-red, #f14c4c); font-weight: 600; }
+/* paused: waiting on something its owed step needs; not done, so no row color */
+.dot.paused:not(.tinted) { opacity: 1; background: transparent; border: 1.5px solid var(--vscode-charts-yellow, #cca700); width: 8px; height: 8px; }
+.state.paused { color: var(--vscode-charts-yellow, #cca700); }
+
 /* your note under a session: its own line from the name column to the row's end, wrapping; it widens
    no column (contain), so a long note never pushes the names aside */
 .row.noted { padding-bottom: 5px; }

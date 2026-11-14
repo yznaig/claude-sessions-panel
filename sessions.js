@@ -421,8 +421,9 @@ class SessionList {
       } else if (status === 'idle' && (prev === 'busy' || prev === 'watching')) {
         this.attention.set(id, 'ready');
         this.restore(id);
-        // A filed session's ready is a quiet dot on its tab; one that reported to the Desk is quiet too.
-        if (!this.folders.of(id) && this.scope.shows(r.cwd) && !this.relayOf(r)) sounds.push('ready');
+        // A filed session's ready is a quiet dot on its tab; one that reported to the Desk, or is
+        // ready to close or paused, is quiet too.
+        if (!this.folders.of(id) && this.scope.shows(r.cwd) && !this.relayOf(r) && !this.markOf(r)) sounds.push('ready');
       }
       this.prevStatus.set(id, status);
     }
@@ -465,6 +466,21 @@ class SessionList {
   relayOf(r) {
     if (!this.hive) return null;
     return this.hive.reportedTo(r.sessionId, this.transcripts.readTranscript(r).turnAt);
+  }
+
+  // A sub-session's ready-to-close or paused mark (hivelog.js markOf), while one holds: set by a final
+  // debrief that passed the hive's open-task check, `hive.py done` or the paused form; cleared by new
+  // work, never by conversation.
+  markOf(r) {
+    return this.hive && this.hive.markOf ? this.hive.markOf(r.sessionId) : null;
+  }
+
+  // How a row's attention reads with its mark: red 'closable' or 'paused' in place of ready, recap at
+  // the Desk or idle, only while the session is idle (a running or watching session shows that, and one
+  // that needs you stays blue).
+  marked(attention, status, mark) {
+    if (!mark || attention === 'waiting' || (status !== 'idle' && status !== 'asleep')) return null;
+    return mark.kind === 'done' ? 'closable' : 'paused';
   }
 
   // A session's state for search results: its live status, asleep, or null when not running.
@@ -583,8 +599,10 @@ class SessionList {
   offlineRow(e, dismissed, { kept, parked, colors, notes }) {
     const a = this.asleep.get(e.id);
     let attention = a && a.ready && !dismissed ? 'ready' : null;
-    const relayedTo = attention ? this.relayOf({ sessionId: e.id, cwd: e.cwd }) : null;
+    const mark = a && !dismissed ? this.markOf({ sessionId: e.id }) : null;
+    const relayedTo = attention && !mark ? this.relayOf({ sessionId: e.id, cwd: e.cwd }) : null;
     if (relayedTo) attention = 'relayed';
+    attention = (a && this.marked(attention, 'asleep', mark)) || attention;
     return {
       id: e.id, pid: null, name: this.transcripts.displayName({ sessionId: e.id, cwd: e.cwd, name: e.name }), cwd: e.cwd,
       repo: path.basename(e.cwd) || '?', status: a ? 'asleep' : 'offline', attention, dismissed, handle: e.handle || '',
@@ -592,7 +610,7 @@ class SessionList {
       keep: kept.has(e.id), stopping: false, canStop: !!a, parked: parked.has(e.id),
       ...this.dotColor(e.id, colors.get(e.id), [e.handle, this.transcripts.displayName({ sessionId: e.id, cwd: e.cwd, name: e.name })]),
       cost: attention === 'ready' ? this.transcripts.replyCost(this.transcripts.readTranscript({ sessionId: e.id, cwd: e.cwd }).reply) : null,
-      relayedTo: relayedTo || '', note: notes.get(e.id) || '',
+      relayedTo: relayedTo || '', pausedFor: attention === 'paused' ? mark.what : '', note: notes.get(e.id) || '',
     };
   }
 
@@ -619,8 +637,11 @@ class SessionList {
       const id = r.sessionId;
       const status = r.status || 'idle';
       let attention = this.attention.get(id) || null;
-      const relayedTo = attention === 'ready' ? this.relayOf(r) : null;
+      const t0 = this.transcripts.readTranscript(r);
+      const mark = status === 'idle' && !t0.closed ? this.markOf(r) : null;
+      const relayedTo = attention === 'ready' && !mark ? this.relayOf(r) : null;
       if (relayedTo) attention = 'relayed';
+      attention = this.marked(attention, status, mark) || attention;
       const dismissed = this.removed.has(id);
       if (!shown(r.cwd)) continue;
       const since = r.statusUpdatedAt || r.updatedAt || r.startedAt || now;
@@ -633,7 +654,7 @@ class SessionList {
         closed: status === 'idle' && t.closed, folder: this.folders.of(id),
         watchingFor: status === 'watching' ? this.transcripts.watchingFor(r) : '',
         cost: attention === 'ready' ? this.transcripts.replyCost(t.reply) : null,
-        relayedTo: relayedTo || '',
+        relayedTo: relayedTo || '', pausedFor: attention === 'paused' ? mark.what : '',
         keep: kept.has(id), stopping: !!(this.asleep.get(id) && this.asleep.get(id).pid === r.pid), canStop: this.stoppable(r),
         parked: marks.parked.has(id), ...this.dotColor(id, colors.get(id), [r.name, this.transcripts.displayName(r)]),
         note: marks.notes.get(id) || '',
@@ -646,7 +667,7 @@ class SessionList {
       if (!shown(f.entry.cwd)) continue;
       rows.push(this.offlineRow(f.entry, false, marks));
     }
-    const rank = x => (x.attention === 'waiting' ? 0 : x.attention === 'ready' ? 1 : x.attention === 'relayed' ? 1.5 : x.status === 'busy' || x.status === 'watching' ? 2 : x.closed ? 4 : 3);
+    const rank = x => (x.attention === 'waiting' ? 0 : x.attention === 'ready' ? 1 : x.attention === 'relayed' ? 1.5 : x.attention === 'closable' ? 1.75 : x.status === 'busy' || x.status === 'watching' ? 2 : x.closed ? 4 : 3);
     // Ready sessions: the one that takes least of your time first.
     const minutes = x => (x.cost ? x.cost.minutes : 0);
     rows.sort((a, b) => rank(a) - rank(b) || minutes(a) - minutes(b) || b.since - a.since);

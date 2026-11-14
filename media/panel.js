@@ -20,11 +20,14 @@
   function label(r) {
     if (r.closed) return '✓ closed';
     if (r.stopping) return 'stopping…';
-    if (r.status === 'asleep') return r.attention === 'ready' ? 'ready · asleep' : r.attention === 'relayed' ? 'recap at ' + r.relayedTo + ' · asleep' : 'asleep';
+    if (r.status === 'asleep') return r.attention === 'ready' ? 'ready · asleep' : r.attention === 'relayed' ? 'recap at ' + r.relayedTo + ' · asleep'
+      : r.attention === 'closable' ? 'ready to close · asleep' : r.attention === 'paused' ? 'paused · asleep' : 'asleep';
     if (r.status === 'offline') return 'not running';
     if (r.attention === 'waiting') return r.waitingFor ? 'needs you: ' + r.waitingFor : 'needs you';
     if (r.attention === 'ready') return 'response ready';
     if (r.attention === 'relayed') return 'recap at ' + r.relayedTo + ' ↗';
+    if (r.attention === 'closable') return 'ready to close';
+    if (r.attention === 'paused') return r.pausedFor ? 'paused · ' + clip(r.pausedFor, WATCH_LABEL_MAX) : 'paused';
     if (r.status === 'busy') return 'running';
     if (r.status === 'watching') return r.watchingFor ? 'watching · ' + clip(r.watchingFor, WATCH_LABEL_MAX) : 'watching';
     if (r.status === 'waiting') return 'needs you';
@@ -193,7 +196,8 @@
     // The star: mark an idle session green to come back to it, or clear the mark. Not on running or
     // watching sessions (they turn green by themselves) or ones that need you (already blue).
     if (watchLine) { /* no star, no chip: the state below spans their columns */ }
-    else if (!r.dismissed && !r.closed && !offline && !asleep && !r.stopping && r.status !== 'busy' && r.status !== 'watching' && r.attention !== 'waiting') {
+    // Nor on one ready to close or paused: new work in it, not a mark, is what clears that.
+    else if (!r.dismissed && !r.closed && !offline && !asleep && !r.stopping && r.status !== 'busy' && r.status !== 'watching' && r.attention !== 'waiting' && r.attention !== 'closable' && r.attention !== 'paused') {
       const marked = r.attention === 'ready' || r.attention === 'relayed';
       const star = el('button', 'star', marked ? '★' : '☆');
       star.title = marked ? 'Clear the green mark' : 'Mark green to come back to it';
@@ -205,6 +209,8 @@
     const marks = [r.parked && 'Parked: other sessions don\'t message it', r.keep && 'Keep running: never auto-closed'].filter(Boolean);
     if (marks.length) st.title = marks.join('\n') + '\n(⋯ to change)';
     if (r.attention === 'relayed') st.title = `It sent its recap to ${r.relayedTo} this turn: answer it there. Click to open this session anyway.` + (st.title ? '\n' + st.title : '');
+    if (r.attention === 'closable') st.title = 'Its final debrief went out with nothing it started still running, and it has done no new work since: safe to close. A new edit, commit or background task in it takes the mark off.' + (st.title ? '\n' + st.title : '');
+    if (r.attention === 'paused') st.title = `Paused: it is waiting on ${r.pausedFor || 'something'}, and its next step comes back to it. Not done; keep it open.` + (st.title ? '\n' + st.title : '');
     d.appendChild(st);
     d.appendChild(el('span', 'age', age(state.now - r.since)));
     if (r.dismissed) {

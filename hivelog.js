@@ -3,16 +3,22 @@
 //   holding the desk role) and the session that started it (children.json). A ready session that
 //   reported there is answered there, so the panel shows it apart from replies waiting for you.
 // - the role a session took (area and role, like runner/builder), for its automatic dot color.
+// - a session's ready-to-close mark: its latest `done`, `paused` or `cleared` record. A sub-session's
+//   final debrief (refused while a background task it started is open) or `hive.py done` writes `done`;
+//   the paused form writes `paused`; new work writes `cleared`.
 // The log is read once, then only what was added.
 //
 //   const hive = new HiveLog(hiveDir)
 //   hive.reportedTo(sessionId, sinceMs) -> the Desk or parent it reported to at or after sinceMs, or null
 //   hive.roleOf(sessionId) -> { area, role } it last took, or null
+//   hive.markOf(sessionId) -> { kind: 'done' | 'paused', what, at } while one holds, or null
 'use strict';
 const fs = require('fs');
 const path = require('path');
 
 const KEEP = 20; // messages remembered per session: only the latest turn's matter
+const MARKS = new Set(['done', 'paused', 'cleared']);
+const MARK_HINT = /"dir": ?"(?:done|paused|cleared)"/;
 
 class HiveLog {
   constructor(dir) {
@@ -27,6 +33,7 @@ class HiveLog {
     this.sent = new Map();  // session id -> [{ at, to, from }], oldest first
     this.desks = new Map(); // workspace + area -> who holds the desk role there
     this.roles = new Map(); // session id -> { area, role } it last took
+    this.marks = new Map(); // session id -> its latest done, paused or cleared record
   }
 
   refresh() {
@@ -58,7 +65,7 @@ class HiveLog {
   }
 
   take(line) {
-    if (line.indexOf('"out"') < 0 && line.indexOf('"role"') < 0) return;
+    if (line.indexOf('"out"') < 0 && line.indexOf('"role"') < 0 && !MARK_HINT.test(line)) return;
     let r;
     try { r = JSON.parse(line); } catch { return; }
     if (r.dir === 'out' && r.fromId && r.to) {
@@ -66,6 +73,10 @@ class HiveLog {
       list.push({ at: (r.at || 0) * 1000, to: String(r.to), from: String(r.from || '') });
       if (list.length > KEEP) list.shift();
       this.sent.set(r.fromId, list);
+    } else if (MARKS.has(r.dir) && r.fromId) {
+      const at = (r.at || 0) * 1000;
+      const was = this.marks.get(r.fromId);
+      if (!was || at >= was.at) this.marks.set(r.fromId, { kind: r.dir, what: String(r.what || ''), at });
     } else if (r.dir === 'role' && r.from) {
       if (r.fromId) this.roles.set(r.fromId, { area: String(r.area || ''), role: String(r.role || '') });
       const key = (r.workspace || '') + '\0' + (r.area || '');
@@ -85,6 +96,12 @@ class HiveLog {
       if (/^desk$/i.test(m.to) || desks.has(m.to) || this.parents.get(m.from) === m.to) return m.to;
     }
     return null;
+  }
+
+  markOf(sessionId) {
+    this.refresh();
+    const m = this.marks.get(sessionId);
+    return m && m.kind !== 'cleared' ? m : null;
   }
 
   roleOf(sessionId) {

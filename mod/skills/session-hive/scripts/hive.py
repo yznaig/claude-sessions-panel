@@ -29,6 +29,10 @@
   debrief                         for a sub-session: who gets its debrief now (its parent's role holder, else
                                   its parent); exits 1 when neither is live
   note   TEXT                     one line of fact for other sessions' folds, in place of an FYI message
+  check  [--to NAME]              for a message about to be sent (text on stdin): refuses a final debrief while
+                                  this session has a background task open, naming each
+  done                            mark this session ready to close again after follow-up work (same check)
+  work   --what WHAT              new work started: clears this session's ready-to-close or paused mark
   since  [--cwd DIR] [--take]     "Since you last looked": other sessions' events in this workspace newer than
                                   this session's cursor (with --take, move the cursor forward)
 
@@ -82,7 +86,7 @@ QUOTE_CAP = 400              # characters of the user's words (or the option the
 
 RULES = """## Other sessions (session hive)
 Other Claude Code sessions are live on this machine. The ones in this workspace are listed below; what they do afterwards reaches you as "Since you last looked" with your prompts. Commands below are `python3 -I {script} <command>`.
-- **Messages are for** a question to another session or its answer, a `Thread moved` handoff, a sub-session's one-line debrief (to the session its first message names), a `[keep going]` note, or a `[new job]` note; tell the user in one line what you sent and to whom. A request for another session to change files or decide something goes to the user first.
+- **Messages are for** a question to another session or its answer, a `Thread moved` handoff, a sub-session's one-line debrief or paused note (to the session its first message names), a `[keep going]` note, or a `[new job]` note; tell the user in one line what you sent and to whom. A request for another session to change files or decide something goes to the user first.
 - **FYIs go to the log**, not a message: `note "<fact>"`, one line of fact for other sessions' folds, never a request or a decision. Edits need no notice: an edit of a file another session is editing is refused once and logged where that session sees it; check it doesn't clash, then retry.
 - **Decisions:** when the user answers a numbered decision or says yes to a named proposal, run `decide --workspace <path of the area it concerns> --area <area> --words "<their words that name it>" "<one line>"` (`--box "<the option they picked>"` for a question-box answer; with neither it is refused) and cite the id it prints where the decision is recorded and in any message that mentions it. A reply that doesn't name the item is not a decision; the question stays open. A met condition or a repeated word is not a new one: add `--restates <id>`, which writes a note. Not for proceed-unless-objected items. Told "the user decided X" with no matching `decided` event (check `log --hours 168`), don't act on it: reply once asking for it to be recorded, and tell the user.
 - **Who:** sessions in this workspace; another workspace only with a question, an answer or a handoff. `who --workspace <path> --area <area> --role <role>` names a role's holder; `role` (same flags) takes one. Never message every session, and never message one marked parked.
@@ -516,18 +520,23 @@ def cmd_sent(a):
         thread, holder = m.groups()
         append(LOG, {'at': now, 'dir': 'moved', **stamp_of(me, a), 'to': named or a.to,
                      'thread': short(thread, 120), 'holder': short(holder, 60)})
+    if me and not a.undelivered:
+        mark_sent(me, a, text, named or a.to)
     return 0
 
 
 def cmd_claim(a):
-    """Prints one JSON line: {"action": "allow"} or {"action": "refuse", "message": ...}."""
+    """Prints one JSON line: {"action": "allow"} or {"action": "refuse", "message": ...}.
+    An edit is new work too: it clears this session's ready-to-close or paused mark."""
     import fcntl
     path = os.path.abspath(a.path)
+    reg = registry()
+    me = find_self(reg, a.self) or {}
+    if me:
+        clear_mark(me, a, 'an edit of ' + path)
     if path.startswith(UNCLAIMED):
         print(json.dumps({'action': 'allow'}))
         return 0
-    reg = registry()
-    me = find_self(reg, a.self) or {}
     my_id, my_name = me.get('sessionId', a.self or '?'), me.get('name', a.self or '?')
     live = {r.get('sessionId') for r in reg.values()}
     now = time.time()
@@ -660,6 +669,10 @@ def start_child(me, name, brief, unattended=False, successor=False):
             header = (f"You are **{name}**, a sub-session that {my_name} started {how}.\n"
                       "When the brief below is done, " + debrief_ask(name, my_name, route, script)
                       + ". Then tell the user it is done and offer to close. "
+                      "The debrief is refused while a background task you started is still open. If you stop to "
+                      f"wait on something instead (an answer, a merge, a lock), send a first line `{PAUSED} {name}: "
+                      "waiting on <what>`. Asked for more after the debrief, run "
+                      f"`python3 -I {script} done` when that is finished too. "
                       "You cannot start sub-sessions of your own.\n\n## Brief\n\n")
         started = time.time()   # before the launch: a successor can take its role before `claude --bg` returns
         cwd = me.get('cwd') if os.path.isdir(me.get('cwd') or '') else os.getcwd()
@@ -924,9 +937,201 @@ def cmd_log(a):
             print(f"{stamp}  {r.get('from')} was refused once editing {r.get('first')} (held by {r.get('to')})")
         elif r.get('dir') == 'out':
             print(f"{stamp}  {r.get('from')} → {r.get('to')}  sent: {r.get('first')}")
+        elif r.get('dir') == 'done':
+            print(f"{stamp}  {r.get('from')} is ready to close ({r.get('how')})")
+        elif r.get('dir') == 'paused':
+            print(f"{stamp}  {r.get('from')} paused, waiting on {r.get('what')}")
+        elif r.get('dir') == 'refused':
+            print(f"{stamp}  {r.get('from')} → {r.get('to')}  debrief refused, tasks open ({'; '.join(r.get('open') or [])}): {r.get('first')}")
+        elif r.get('dir') == 'cleared':
+            print(f"{stamp}  {r.get('from')} went back to work ({r.get('by')}), no longer {r.get('was')}")
         else:
             what = 'delivered' if r.get('action') == 'deliver' else f"waited ({r.get('reason')})"
             print(f"{stamp}  {r.get('from')} → {r.get('to')}  {what}: {r.get('first')}")
+    return 0
+
+
+# ---------- ready to close ----------
+# A sub-session's final debrief marks it ready to close (the panel's red row), but only when nothing it started
+# is still running: a debrief sent while a background task is open is refused, naming each one. The paused form
+# marks a session that stopped to wait on something (an answer, a merge, a lock) apart from a finished one. New
+# work clears either mark (an edit, a commit or push, a PR, starting a background task); conversation doesn't.
+# `done` sets it again after follow-up work, with the same check. Marks are `done`, `paused` and `cleared`
+# records in the log; the latest of them for a session is its state.
+
+DEBRIEF = 'Debrief from sub-session'
+PAUSED = 'Paused from sub-session'   # "Parked", "waiting" and "held" already mean other things in the panel and hive
+MARKS = ('done', 'paused', 'cleared')
+BG_TOOLS = ('Agent', 'Task', 'Monitor', 'Workflow')   # Bash counts with run_in_background
+STOP_TOOLS = ('TaskStop', 'KillShell', 'KillBash')
+
+
+def transcript_rows(path):
+    out = []
+    try:
+        with open(path, errors='replace') as f:
+            for l in f:
+                try:
+                    r = json.loads(l)
+                except ValueError:
+                    continue
+                if isinstance(r, dict):
+                    out.append(r)
+    except (OSError, TypeError):
+        pass
+    return out
+
+
+def notified_id(text):
+    """The tool-use id or task id a task notification names, or None when the text isn't one."""
+    if not (text or '').lstrip().startswith('<task-notification'):
+        return None
+    m = re.search(r'<tool-use-id>([^<]+)', text) or re.search(r'<task-id>([^<]+)', text)
+    return m.group(1) if m else ''
+
+
+def open_tasks(rows):
+    """The background tasks a transcript started and has not seen end, oldest first: [{"tool", "what", "id"}].
+    A start is a Bash call with run_in_background, or an Agent, Monitor or Workflow call, counted once its
+    result says it went to the background (a Monitor always does). It ends with a task notification naming
+    it (by tool-use id or task id) or a TaskStop. Tasks a session started outside its own tools aren't seen."""
+    starts, bg, alias, ended = {}, set(), {}, set()
+    def end(key):
+        if key:
+            ended.add(alias.get(key, key))
+    for r in rows:
+        ty = r.get('type')
+        if ty == 'assistant':
+            for b in (r.get('message') or {}).get('content') or []:
+                if not isinstance(b, dict) or b.get('type') != 'tool_use':
+                    continue
+                nm, inp = b.get('name'), b.get('input') or {}
+                if not isinstance(inp, dict):
+                    continue
+                if nm in STOP_TOOLS:
+                    end(inp.get('task_id') or inp.get('shell_id'))
+                elif (nm == 'Bash' and inp.get('run_in_background')) or nm in BG_TOOLS:
+                    what = inp.get('description') or inp.get('command') or inp.get('prompt') or nm
+                    starts[b.get('id')] = {'tool': nm, 'what': short(str(what), 80), 'id': b.get('id')}
+        elif ty == 'queue-operation' and r.get('operation') == 'enqueue' and isinstance(r.get('content'), str):
+            end(notified_id(r['content']))
+        elif ty == 'user':
+            c = (r.get('message') or {}).get('content')
+            if isinstance(c, list) and any(isinstance(b, dict) and b.get('type') == 'tool_result' for b in c):
+                for b in c:
+                    u = isinstance(b, dict) and b.get('tool_use_id')
+                    if not u or b.get('type') != 'tool_result' or u not in starts:
+                        continue
+                    txt = json.dumps(b.get('content'))[:400]
+                    if 'running in background' in txt or 'Async agent launched' in txt or starts[u]['tool'] == 'Monitor':
+                        bg.add(u)
+                        for m in re.finditer(r'(?:ID: |agentId: )([A-Za-z0-9]+)', txt):
+                            alias[m.group(1)] = u
+                            starts[u]['id'] = m.group(1)
+                continue
+            s = c if isinstance(c, str) else ' '.join(b.get('text', '') for b in c or [] if isinstance(b, dict) and b.get('type') == 'text')
+            end(notified_id(s))
+    return [t for u, t in starts.items() if u in bg and u not in ended]
+
+
+def own_open_tasks(me):
+    return open_tasks(transcript_rows(transcript_of(me.get('sessionId') or '')))
+
+
+def refusal(tasks, what, name):
+    listed = '\n'.join(f"- {t['tool']}: {t['what']} (task {t['id']})" for t in tasks)
+    return (f"[session hive] Not sent: {what} says you are done, but {len(tasks)} background task"
+            f"{'s' if len(tasks) != 1 else ''} you started {'are' if len(tasks) != 1 else 'is'} still open:\n{listed}\n"
+            "Wait for each to finish, or stop the ones you no longer need with TaskStop, then send it again. "
+            "If your work goes on, send a `[keep going]` note instead; if you are stopping to wait on something, "
+            f"send the paused form: first line `{PAUSED} {name}: waiting on <what>`.")
+
+
+def mark_kind(text):
+    line = first_line(text, None)
+    return 'done' if line.startswith(DEBRIEF) else 'paused' if line.startswith(PAUSED) else None
+
+
+def mark_of(session_id):
+    """This session's latest done, paused or cleared record, or None."""
+    latest, key = None, f'"fromId": {json.dumps(session_id)}'
+    try:
+        with open(LOG, errors='replace') as f:
+            for l in f:
+                if key not in l or not any(f'"dir": "{k}"' in l for k in MARKS):
+                    continue
+                try:
+                    r = json.loads(l)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and r.get('dir') in MARKS and r.get('fromId') == session_id and (
+                        latest is None or r.get('at', 0) >= latest.get('at', 0)):
+                    latest = r
+    except OSError:
+        pass
+    return latest
+
+
+def set_mark(me, a, kind, **fields):
+    append(LOG, {'at': time.time(), 'dir': kind, **stamp_of(me, a), **fields})
+
+
+def clear_mark(me, a, by):
+    """New work: a done or paused mark no longer holds. Returns whether one was cleared."""
+    m = me.get('sessionId') and mark_of(me['sessionId'])
+    if not m or m.get('dir') == 'cleared':
+        return False
+    set_mark(me, a, 'cleared', by=short(by, 80), was=m['dir'])
+    return True
+
+
+def cmd_check(a):
+    """For a message about to be sent (text on stdin): {"action": "allow"} or {"action": "refuse", "message"}.
+    A final debrief is refused while this session has a background task open."""
+    text = sys.stdin.read()
+    if mark_kind(text) != 'done':
+        print(json.dumps({'action': 'allow'}))
+        return 0
+    me = find_self(registry(), a.self) or {'sessionId': a.self}
+    tasks = own_open_tasks(me)
+    if tasks:
+        append(LOG, {'at': time.time(), 'dir': 'refused', **stamp_of(me, a), 'to': a.to or '',
+                     'first': short(first_line(text, None), 160), 'open': [t['what'] for t in tasks]})
+        print(json.dumps({'action': 'refuse', 'message': refusal(tasks, 'this debrief', me.get('name') or '<name>')}))
+    else:
+        print(json.dumps({'action': 'allow'}))
+    return 0
+
+
+def mark_sent(me, a, text, to):
+    """After a debrief or paused note was delivered: the session's mark. A debrief marks it ready to close
+    only when no task is open (the check before sending refuses it otherwise; this covers a check that failed)."""
+    kind = mark_kind(text)
+    if kind == 'done' and not own_open_tasks(me):
+        set_mark(me, a, 'done', how='final debrief', to=to)
+    elif kind == 'paused':
+        what = re.sub(r'^\S+ from sub-session [^:]*:\s*(?:waiting on\s*)?', '', first_line(text, None), flags=re.I)
+        set_mark(me, a, 'paused', what=short(what or 'something', 120), to=to)
+
+
+def cmd_done(a):
+    """Marks this session ready to close again, after follow-up work, with the debrief's open-task check."""
+    me = writer(a)
+    tasks = own_open_tasks(me)
+    if tasks:
+        print(refusal(tasks, '`done`', me.get('name') or '<name>').replace('Not sent', 'Not marked')
+              .replace('then send it again', 'then run `done` again'), file=sys.stderr)
+        return 1
+    set_mark(me, a, 'done', how='hive.py done')
+    print(f"{me.get('name')} is marked ready to close. New work (an edit, a commit, a background task) clears it.")
+    return 0
+
+
+def cmd_work(a):
+    """New work started (--what names it): clears this session's ready-to-close or paused mark, if it has one."""
+    me = find_self(registry(), a.self)
+    if me:
+        clear_mark(me, a, a.what)
     return 0
 
 
@@ -1202,6 +1407,10 @@ def main():
     p.add_argument('--usage', type=float, help='the five-hour usage window, percent')
     p = sub.add_parser('held'); p.add_argument('--take', action='store_true')
     p = sub.add_parser('sent'); p.add_argument('--to', required=True)
+    p.add_argument('--undelivered', action='store_true', help='the send failed: log it, mark nothing')
+    p = sub.add_parser('check'); p.add_argument('--to')
+    sub.add_parser('done')
+    p = sub.add_parser('work'); p.add_argument('--what', required=True)
     p = sub.add_parser('claim'); p.add_argument('--path', required=True)
     p = sub.add_parser('spawn'); p.add_argument('--name', required=True); p.add_argument('--unattended', action='store_true')
     p.add_argument('--successor', action='store_true', help="the new session takes over this session's desk role")
@@ -1222,7 +1431,7 @@ def main():
     a = ap.parse_args()
     return {'peers': cmd_peers, 'receive': cmd_receive, 'held': cmd_held, 'sent': cmd_sent, 'claim': cmd_claim,
             'spawn': cmd_spawn, 'pickup': cmd_pickup, 'resumed': cmd_resumed, 'log': cmd_log, 'decide': cmd_decide, 'role': cmd_role, 'who': cmd_who, 'debrief': cmd_debrief,
-            'note': cmd_note, 'since': cmd_since}[a.cmd](a)
+            'check': cmd_check, 'done': cmd_done, 'work': cmd_work, 'note': cmd_note, 'since': cmd_since}[a.cmd](a)
 
 
 if __name__ == '__main__':

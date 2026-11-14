@@ -273,6 +273,11 @@ let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
     this.hive({ dir: 'out', from: name, fromId: this.id(name), workspace: this.proj, to, first });
     this.hive({ dir: 'in', from: name, to, action: 'deliver', first });
   }
+  // A ready-to-close mark as hive.py writes it: 'done' (a checked final debrief, or `hive.py done`),
+  // 'paused' (the paused form, with what it waits on) or 'cleared' (new work).
+  hiveMark(name, kind, fields = {}) {
+    this.hive({ dir: kind, from: name, fromId: this.id(name), workspace: this.proj, ...fields });
+  }
   hiveChild(name, parent) {
     const file = path.join(this.home, '.claude/session-hive/children.json');
     let kids = [];

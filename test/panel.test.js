@@ -1229,6 +1229,69 @@ withHarness('recap at Desk: the Desk by role, a sub-session\'s parent, and a tur
   eq(h.row('c').attention, 'ready');
 });
 
+// ---- ready to close: a sub-session's checked final debrief, until new work -----------------
+
+withHarness('ready to close: a checked debrief turns the row red, quiet and off the badge, after the green ones', async h => {
+  const s = h.session('s'); const r = h.session('r'); const i = h.session('i');
+  h.start();
+  await turn(h, s, 's'); await turn(h, r, 'r');
+  h.advance(60e3); h.hiveSent('s', 'Desk'); h.hiveMark('s', 'done', { how: 'final debrief', to: 'Desk' });
+  s.set('idle'); r.set('idle'); h.step();
+  eq(h.row('s').attention, 'closable', 'red, not the purple recap at Desk'); eq(h.row('s').cost, null);
+  same(h.takeSounds(), ['ready'], 'only r sounds');
+  eq(h.panel.badge.value, 1, 'only the reply waiting for you counts');
+  h.advance(5000); i.set('idle'); h.step();
+  same(h.order(), ['r', 's', 'i'], 'green first, then red, then the rest');
+  const by = Object.fromEntries(h.snapshot().rows.map(x => [x.id.slice(h.prefix.length), x]));
+  eq(by.s.state, 'closable');
+});
+
+withHarness('ready to close: survives your prompt and a hive message; new work clears it; `done` sets it again', async h => {
+  const s = h.session('s');
+  h.start();
+  await turn(h, s, 's'); h.advance(60e3); h.hiveSent('s', 'Desk'); h.hiveMark('s', 'done'); s.set('idle'); h.step();
+  eq(h.row('s').attention, 'closable');
+  // You ask it something: running while it answers, red again after.
+  h.advance(60e3); await turn(h, s, 's'); eq(h.row('s').status, 'busy'); eq(h.row('s').attention, null);
+  h.advance(60e3); s.set('idle'); h.step();
+  eq(h.row('s').attention, 'closable', 'conversation does not clear it'); same(h.takeSounds(), []);
+  // Another session's message wakes it; it answers.
+  h.advance(60e3); await turn(h, s, 's', L.peer('one more thing?', h.now)); h.advance(60e3); s.set('idle'); h.step();
+  eq(h.row('s').attention, 'closable');
+  // It edits a file (or commits, or starts a background task): the mark is cleared, its reply is yours.
+  h.advance(60e3); await turn(h, s, 's'); h.hiveMark('s', 'cleared', { by: 'an edit of /w/a.md', was: 'done' });
+  h.advance(60e3); s.set('idle'); h.step();
+  eq(h.row('s').attention, 'ready'); same(h.takeSounds(), ['ready']);
+  h.advance(60e3); h.hiveMark('s', 'done', { how: 'hive.py done' }); h.step();
+  eq(h.row('s').attention, 'closable', 'hive.py done sets it again');
+});
+
+withHarness('ready to close: never while a background command runs; a question to the Desk stays purple', async h => {
+  const w = h.session('w', { status: 'busy', background: true, transcript: [L.user('merge it'), L.background('t1', 'Poll deploy'), L.started('t1')] });
+  const q = h.session('q');
+  await h.pause(100); // the background shell has started
+  h.start();
+  h.hiveMark('w', 'done'); // a mark that got past the check: the panel still looks for the command itself
+  await turn(h, q, 'q'); h.advance(60e3); h.hiveSent('q', 'Desk', 'Question: merge 712 before 713?');
+  w.set('idle'); q.set('idle'); h.step();
+  eq(h.row('w').status, 'watching'); eq(h.row('w').attention, null, 'watching, not red');
+  eq(h.row('q').attention, 'relayed'); eq(h.row('q').relayedTo, 'Desk');
+});
+
+withHarness('paused: the paused form shows its own label and color, not red, and new work clears it', async h => {
+  const s = h.session('s');
+  h.start();
+  await turn(h, s, 's'); h.advance(60e3);
+  h.hiveSent('s', 'Desk', 'Paused from sub-session s: waiting on the merge word for 712');
+  h.hiveMark('s', 'paused', { what: 'the merge word for 712' });
+  s.set('idle'); h.step();
+  eq(h.row('s').attention, 'paused'); eq(h.row('s').pausedFor, 'the merge word for 712');
+  same(h.takeSounds(), []);
+  h.hiveMark('s', 'cleared', { by: 'a background Monitor', was: 'paused' }); h.step();
+  eq(h.row('s').attention, 'relayed', 'back to what this turn was: a note to the Desk');
+  eq(h.row('s').pausedFor, '');
+});
+
 // ---- automatic dot colors: by the job in a session's name, title or hive role ---------
 
 const RED = '#ce4646', GREEN = '#46ce51', PURPLE = '#9546ce', ORANGE = '#ce8546';

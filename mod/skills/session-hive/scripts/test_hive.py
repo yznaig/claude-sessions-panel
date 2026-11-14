@@ -199,8 +199,9 @@ class Hive(unittest.TestCase):
 
     def test_a_message_sent_to_a_socket_is_logged_under_the_sessions_name(self):
         self.run_hive('sent', '--to', f'uds:/run/user/1/cc-socks/{os.getppid()}.sock', stdin='Debrief from sub-session x: done')
-        rec = self.log()[-1]
+        rec = [r for r in self.log() if r['dir'] == 'out'][-1]
         self.assertEqual(rec['to'], 'work-bb')
+        self.assertEqual(self.log()[-1]['to'], 'work-bb', 'the debrief\'s ready-to-close mark names the session too')
         self.assertTrue(rec['toSocket'].endswith(f'/{os.getppid()}.sock'))
         self.run_hive('sent', '--to', 'uds:/run/user/1/cc-socks/1.sock', stdin='to a gone session')
         self.assertEqual(self.log()[-1]['to'], 'uds:/run/user/1/cc-socks/1.sock', 'an unknown socket stays as given')
@@ -898,7 +899,7 @@ class Hive(unittest.TestCase):
         self.assertLessEqual(len(lines[0]), 200)
 
     def test_a_sub_sessions_debrief_is_an_allowed_message(self):
-        self.assertIn("a sub-session's one-line debrief (to the session its first message names)", self.run_hive('peers'))
+        self.assertIn("a sub-session's one-line debrief or paused note (to the session its first message names)", self.run_hive('peers'))
 
     # --- where a debrief goes ---
 
@@ -1064,6 +1065,133 @@ class Hive(unittest.TestCase):
     def test_a_windows_workspace_path_is_read_as_its_wsl_path(self):
         self.run_hive('decide', '--words', 'yes', '--workspace', 'C:\\HQ\\vault', '--area', 'qa', 'x')
         self.assertEqual(self.log()[-1]['workspace'], '/mnt/c/HQ/vault')
+
+    # --- ready to close ---
+
+    DEBRIEF = 'Debrief from sub-session work-aa: PR 712 merged, notes in docs/ship.md'
+
+    @staticmethod
+    def call(uid, name, **inp):
+        return {'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'id': uid, 'name': name, 'input': inp}]}}
+
+    @staticmethod
+    def result(uid, text):
+        return {'type': 'user', 'message': {'content': [{'type': 'tool_result', 'tool_use_id': uid, 'content': text}]}}
+
+    @staticmethod
+    def notified(task_id, uid=None):
+        use = f'<tool-use-id>{uid}</tool-use-id>\n' if uid else ''
+        return {'type': 'user', 'message': {'content': f'<task-notification>\n<task-id>{task_id}</task-id>\n{use}<status>completed</status>'}}
+
+    def mine(self, *records):
+        self.transcript('me-0001', '/work/repo', list(records))
+
+    def check(self, text=None):
+        return json.loads(self.run_hive('check', '--to', 'desk-4', stdin=text or self.DEBRIEF))
+
+    def marks(self):
+        try:
+            return [r for r in self.log() if r.get('dir') in ('done', 'paused', 'cleared')]
+        except FileNotFoundError:
+            return []
+
+    BG_BASH = staticmethod(lambda: (Hive.call('u1', 'Bash', command='gh run watch 99', description='Watch CI', run_in_background=True),
+                                    Hive.result('u1', 'Command running in background with ID: bk1. Output is being written to: /tmp/x')))
+
+    def test_a_debrief_with_a_background_command_open_is_refused_naming_it(self):
+        self.mine(*self.BG_BASH())
+        v = self.check()
+        self.assertEqual(v['action'], 'refuse')
+        self.assertIn('Watch CI (task bk1)', v['message'])
+        self.assertIn('TaskStop', v['message'])
+        self.assertIn('Paused from sub-session work-aa: waiting on <what>', v['message'])
+        self.assertEqual(self.log()[-1]['dir'], 'refused')
+        self.assertIn('debrief refused', self.run_hive('log'))
+
+    def test_a_debrief_passes_once_the_task_is_notified_or_stopped(self):
+        self.mine(*self.BG_BASH(), self.notified('bk1', 'u1'))
+        self.assertEqual(self.check()['action'], 'allow')
+        self.mine(*self.BG_BASH(), self.call('u2', 'TaskStop', task_id='bk1'))
+        self.assertEqual(self.check()['action'], 'allow')
+
+    def test_a_notice_written_before_its_call_still_ends_the_task(self):
+        self.mine(self.notified('bk1', 'u1'), *self.BG_BASH())
+        self.assertEqual(self.check()['action'], 'allow')
+
+    def test_an_open_monitor_or_agent_is_refused_too_and_a_foreground_command_is_not(self):
+        self.mine(self.call('m1', 'Monitor', command='tail -f x', description='Watch the lock'),
+                  self.result('m1', 'Monitor started (ID: mon1)'),
+                  self.call('a1', 'Agent', description='Review the diff', prompt='x'),
+                  self.result('a1', 'Async agent launched successfully. agentId: ag1'),
+                  self.call('b1', 'Bash', command='ls'), self.result('b1', 'a b'))
+        msg = self.check()['message']
+        self.assertIn('Monitor: Watch the lock', msg)
+        self.assertIn('Agent: Review the diff (task ag1)', msg)
+        self.assertNotIn('ls', msg.split('\n', 1)[1].split('Wait')[0])
+        self.mine(self.call('m1', 'Monitor', command='tail -f x', description='Watch the lock'),
+                  self.result('m1', 'Monitor started (ID: mon1)'), self.notified('mon1'),
+                  self.call('a1', 'Agent', description='Review the diff', prompt='x'),
+                  self.result('a1', 'Async agent launched successfully. agentId: ag1'), self.notified('ag1'))
+        self.assertEqual(self.check()['action'], 'allow')
+
+    def test_only_a_final_debrief_is_checked(self):
+        self.mine(*self.BG_BASH())
+        for text in ('Question: merge 712 first?', '[keep going] Debrief from sub-session work-aa: 712 merged',
+                     'Paused from sub-session work-aa: waiting on the kit lock'):
+            self.assertEqual(self.check(text)['action'], 'allow', text)
+
+    def test_a_sent_debrief_marks_ready_to_close_and_only_new_work_clears_it(self):
+        self.mine()
+        self.run_hive('sent', '--to', 'desk-4', stdin=self.DEBRIEF)
+        self.assertEqual([m['dir'] for m in self.marks()], ['done'])
+        # conversation: a prompt's fold, a message in, a question out
+        self.run_hive('since', '--take', '--cwd', '/work/repo')
+        self.receive()
+        self.run_hive('sent', '--to', 'desk-4', stdin='Question: anything else?')
+        self.assertEqual([m['dir'] for m in self.marks()], ['done'])
+        self.run_hive('claim', '--path', '/work/repo/a.md')
+        self.assertEqual([m['dir'] for m in self.marks()], ['done', 'cleared'])
+        self.assertIn('/work/repo/a.md', self.marks()[-1]['by'])
+        self.run_hive('claim', '--path', '/work/repo/b.md')   # nothing left to clear
+        self.assertEqual(len(self.marks()), 2)
+        self.assertIn('ready to close', self.run_hive('done'))
+        self.run_hive('work', '--what', 'git commit')
+        self.assertEqual([m['dir'] for m in self.marks()], ['done', 'cleared', 'done', 'cleared'])
+        self.assertIn('went back to work (git commit)', self.run_hive('log'))
+
+    def test_done_is_refused_while_a_task_is_open(self):
+        self.mine(*self.BG_BASH())
+        p = self.run_hive('done', ok=False, full=True)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn('Watch CI', p.stderr)
+        self.assertIn('run `done` again', p.stderr)
+        self.assertEqual(self.marks(), [])
+
+    def test_an_undelivered_debrief_or_one_with_a_task_open_marks_nothing(self):
+        self.mine()
+        self.run_hive('sent', '--to', 'nobody', '--undelivered', stdin=self.DEBRIEF)
+        self.mine(*self.BG_BASH())
+        self.run_hive('sent', '--to', 'desk-4', stdin=self.DEBRIEF)   # the check before sending failed
+        self.assertEqual(self.marks(), [])
+
+    def test_the_paused_form_is_its_own_mark_and_says_what_it_waits_on(self):
+        self.run_hive('sent', '--to', 'desk-4', stdin='Paused from sub-session work-aa: waiting on the user\'s merge word for 712')
+        m = self.marks()[-1]
+        self.assertEqual((m['dir'], m['what']), ('paused', "the user's merge word for 712"))
+        self.run_hive('work', '--what', 'a background Monitor')
+        self.assertEqual(self.marks()[-1]['was'], 'paused')
+
+    def test_the_fold_leaves_marks_out(self):
+        self.run_hive('done', self_id='peer-0002')
+        self.run_hive('work', '--what', 'x', self_id='peer-0002')
+        self.assertEqual(self.since(), '')
+
+    def test_a_sub_session_is_told_the_check_the_paused_form_and_done(self):
+        self.run_hive('spawn', '--name', 'notice-drafts', stdin='Draft the notices.', env_extra={'HIVE_SPAWN': 'bg'})
+        prompt = self.spawns()[-1]['argv'][-1]
+        self.assertIn('refused while a background task you started is still open', prompt)
+        self.assertIn('`Paused from sub-session notice-drafts: waiting on <what>`', prompt)
+        self.assertRegex(prompt, r'hive\.py done`')
 
 
 if __name__ == '__main__':

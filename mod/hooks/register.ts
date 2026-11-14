@@ -81,6 +81,18 @@ async function claimRefusal($: EngineInterface, path: string | undefined): Promi
   return undefined
 }
 
+// Ready to close: a sub-session's final debrief (first line `Debrief from sub-session …`) is refused while a
+// background task it started is still open, and once sent marks it ready to close (the panel's red row). New
+// work clears the mark: an edit (the claim check above clears it), a commit, push, merge or PR, or starting a
+// background task. Conversation doesn't. The decisions are hive.py's (`check`, `sent`, `work`).
+const DEBRIEF = /^\s*Debrief from sub-session\b/
+const WORK_CMD = /\bgit\s+(?:-C\s+\S+\s+)?(?:commit|push|merge)\b|\bgh\s+pr\s+(?:create|merge)\b/
+
+async function newWork($: EngineInterface, what: string): Promise<void> {
+  if (headless) return
+  await hive($, ['work', '--what', what]).catch(err => $.ui.log(`session hive: mark not cleared (${err})`, { to: 'debug' }))
+}
+
 function isUser(origin: { kind: string } | undefined): boolean {
   return !origin || origin.kind === 'composer' || origin.kind === 'bridge'
 }
@@ -204,8 +216,17 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('session.send', async ($, e, next) => {
+    if (e.agentId || headless) return next(e)
+    if (DEBRIEF.test(e.text)) {
+      try {
+        const verdict = JSON.parse(await hive($, ['check', '--to', e.to], e.text)) as { action: string; message?: string }
+        if (verdict.action === 'refuse' && verdict.message) return { isDelivered: false, reason: verdict.message }
+      } catch (err) {
+        $.ui.log(`session hive: debrief not checked (${err})`, { to: 'debug' })
+      }
+    }
     const r = await next(e)
-    if (!e.agentId && !headless) await hive($, ['sent', '--to', e.to], e.text).catch(() => {})
+    await hive($, ['sent', '--to', e.to, ...(r.isDelivered ? [] : ['--undelivered'])], e.text).catch(() => {})
     return r
   }).catch(($, e, next) => next(e))
 
@@ -218,6 +239,19 @@ export const register: Register = on => {
     .catch(($, e, next) => next(e))
   on('tool.call', { tool: 'NotebookEdit' }, async ($, e, next) => (await claimRefusal($, e.notebook_path)) ?? next(e))
     .catch(($, e, next) => next(e))
+
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    if (e.run_in_background) await newWork($, 'a background command: ' + (e.description || e.command).slice(0, 60))
+    else if (WORK_CMD.test(e.command)) await newWork($, (WORK_CMD.exec(e.command)?.[0] ?? 'a commit').replace(/\s+/g, ' '))
+    return next(e)
+  }).catch(($, e, next) => next(e))
+  // Agent calls run in the background in this build; its old name, Task, reaches the same hook.
+  for (const tool of ['Agent', 'Monitor', 'Workflow'] as const) {
+    on('tool.call', { tool }, async ($, e, next) => {
+      await newWork($, `a background ${tool}`)
+      return next(e)
+    }).catch(($, e, next) => next(e))
+  }
 
   on('session.start', async ($, e, next) => {
     const entrypoint = (await $.env.get('CLAUDE_CODE_ENTRYPOINT').catch(() => undefined)) ?? ''
