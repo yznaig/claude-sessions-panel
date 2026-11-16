@@ -10,7 +10,7 @@
   spawn  --kind errand|sit-down --name NAME [--unattended] [--successor]   start a sub-session of this one
                                   (brief on stdin); one level deep, except that a desk role's holder may start its
                                   own even as a sub-session; --unattended only while the user is away (the panel's
-                                  moon), two per away; --successor (desk holders) starts the session that takes
+                                  moon), no cap on how many; --successor (desk holders) starts the session that takes
                                   the role, and needs no kind. Every other spawn names its kind or is refused with
                                   the verb test: an errand does the job and debriefs, in the background (`claude
                                   --bg`); a sit-down does its prep and waits for the user, as a Claude Code tab
@@ -69,7 +69,6 @@ RETRY_SECONDS = 600          # after a refusal, an edit of the same file within 
 UNCLAIMED = ('/tmp/', '/proc/', '/dev/')
 CHILDREN = os.path.join(HIVE, 'children.json')
 DESK_ROLE = 'desk'           # a session holding this role may start sub-sessions even when it is one itself
-UNATTENDED_LIMIT = 2         # sub-sessions one session may start without the user's yes, per stretch away
 CLAUDE = os.environ.get('HIVE_CLAUDE', 'claude')
 RESUME = os.path.join(HIVE, 'resume')     # <session id>.json: a watch the panel cut off to open the session here
 RESUME_FRESH_SECONDS = 3600                # an older note is about some earlier opening
@@ -646,7 +645,7 @@ def start_child(me, name, brief, unattended=False, successor=False, kind=None):
     come up); an errand or a successor always starts in the background. Returns {"action": "started", "name",
     "id", "where": "tab" | "background", "kind"?, "note"?} or {"action": "refused", "reason"}. One level deep,
     except that a session holding a desk role may start its own even when it was itself started as one (a
-    Desk's successor); unattended only while the user is away, two per away. With successor, the new session is
+    Desk's successor); unattended only while the user is away, no cap on how many. With successor, the new session is
     told to take over `me`'s desk role and owes no debrief, and has no kind. A sit-down's header tells it to do
     its prep, wait for the user, and debrief when its end goal is done."""
     kind = None if successor else kind
@@ -674,9 +673,6 @@ def start_child(me, name, brief, unattended=False, successor=False, kind=None):
         if unattended:
             if since is None:
                 return {'action': 'refused', 'reason': 'the user is not away (the moon is off), so a sub-session needs their yes'}
-            used = [k for k in kids if k.get('parentId') == me.get('sessionId') and k.get('unattended') and k.get('at', 0) >= since]
-            if len(used) >= UNATTENDED_LIMIT:
-                return {'action': 'refused', 'reason': f'{my_name} already started {len(used)} sub-sessions while the user has been away'}
         top = desk or (held[0] if held else None)   # a Desk's sub-sessions debrief the Desk, whatever else it holds
         route = {k: top[k] for k in ('workspace', 'area', 'role')} if top else None
         how = ("without the user's yes, while the user is away. Carry on only with work the user already approved "

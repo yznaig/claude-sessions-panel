@@ -692,16 +692,13 @@ class Hive(unittest.TestCase):
         self.assertEqual(p.returncode, 1)
         self.assertIn('kid-cc holds the desk role for hire, so it owes work-aa no debrief', p.stderr)
 
-    def test_unattended_only_while_away_and_two_per_stretch_away(self):
+    def test_unattended_only_while_away_and_no_count_cap(self):
         self.assertIn('not away', self.spawn('a', '--unattended')['reason'])
         self.set_away()
-        self.assertEqual(self.spawn('a', '--unattended')['action'], 'started')
-        self.assertEqual(self.spawn('b', '--unattended')['action'], 'started')
-        r = self.spawn('c', '--unattended')
-        self.assertEqual(r['action'], 'refused')
-        self.assertIn('already started 2', r['reason'])
+        for n in 'abcde':   # no cap on how many while away (Aaron, HIRE e1116-01)
+            self.assertEqual(self.spawn(n, '--unattended')['action'], 'started')
         self.assertIn('take on no new job', self.spawns()[0]['argv'][4])
-        self.assertEqual(self.spawn('d')['action'], 'started', "with the user's yes the cap does not apply")
+        self.assertEqual(self.spawn('f')['action'], 'started')
 
     def test_a_keep_going_or_new_job_note_wakes_a_long_session(self):
         for marker in ('[keep going] the runner stalled on TICKET-5', '[new job] build the poses (e1107-40)'):
