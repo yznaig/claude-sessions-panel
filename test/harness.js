@@ -136,6 +136,7 @@ class Harness {
       focusCommand: 'claude-vscode.editor.open',
       searchFolders: [path.join(this.home, '.claude/projects')],
       askCommand: path.join(this.home, 'fake-claude'),
+      recaps: false, // on in the recap tests only, so other tests start no model calls
     };
     // A stand-in for `claude -p`: records its arguments and what it was sent, prints this.askReply.
     this.askReply = { answer: null, sources: [] };
@@ -151,6 +152,14 @@ if (process.argv[2] === 'stop') {
   process.stdout.write('stopped ' + process.argv[3]); process.exit(0);
 }
 let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
+  if (process.argv.includes('haiku')) { // a recap: recorded, answered from recap-reply.json
+    fs.appendFileSync(dir + '/recap-calls.ndjson', JSON.stringify(input) + '\\n');
+    fs.writeFileSync(dir + '/recap-args.json', JSON.stringify(process.argv.slice(2)));
+    let reply = { text: '', exit: 1 };
+    try { reply = JSON.parse(fs.readFileSync(dir + '/recap-reply.json', 'utf8')); } catch {}
+    process.stdout.write(JSON.stringify({ type: 'result', is_error: reply.exit !== 0, result: reply.text }));
+    process.exit(reply.exit);
+  }
   fs.writeFileSync(dir + '/ask-input.txt', input); fs.writeFileSync(dir + '/ask-args.json', JSON.stringify(process.argv.slice(2)));
   const reply = JSON.parse(fs.readFileSync(dir + '/ask-reply.json', 'utf8'));
   process.stdout.write(JSON.stringify({ type: 'result', is_error: reply.exit !== 0, result: JSON.stringify(reply.body) }));
@@ -278,6 +287,13 @@ let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
   hiveMark(name, kind, fields = {}) {
     this.hive({ dir: kind, from: name, fromId: this.id(name), workspace: this.proj, ...fields });
   }
+  // The recap model's next answers, what it has been sent, and waiting for it to finish.
+  recapReply(text, exit = 0) { fs.writeFileSync(path.join(this.home, 'recap-reply.json'), J({ text, exit })); }
+  recapCalls() {
+    try { return fs.readFileSync(path.join(this.home, 'recap-calls.ndjson'), 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)); } catch { return []; }
+  }
+  recapsDone() { return this.app.recapsIdle(); }
+
   hiveChild(name, parent) {
     const file = path.join(this.home, '.claude/session-hive/children.json');
     let kids = [];

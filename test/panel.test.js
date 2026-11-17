@@ -1055,11 +1055,11 @@ withHarness('color: every window sees it, search results carry it, and anything 
 
 // ---- notes under a session ------------------------------------------------------
 
-withHarness('note: added by right-click, it stays through reload, restart, sleep and Removed; empty removes it', async h => {
+withHarness('note: typed under the row, it stays through reload, restart, sleep and Removed; empty removes it', async h => {
   const a = h.session('a'); h.session('b');
   h.start();
   eq(h.row('a').note, '');
-  h.answers.push('  waiting on\nreview  '); await h.send({ type: 'editNote', id: a.id });
+  await h.send({ type: 'note', id: a.id, text: '  waiting on\nreview  ' });
   eq(h.row('a').note, 'waiting on review', 'one line, trimmed'); eq(h.row('b').note, '');
   eq(h.snapshot().rows.find(r => r.id === a.id).note, 'waiting on review', 'read-sessions sees it');
   eq('note' in h.snapshot().rows.find(r => r.id === h.id('b')), false);
@@ -1068,12 +1068,10 @@ withHarness('note: added by right-click, it stays through reload, restart, sleep
   eq(h.row('a').status, 'asleep'); eq(h.row('a').dismissed, true); eq(h.row('a').note, 'waiting on review');
   await h.send({ type: 'restore', id: a.id }); eq(h.row('a').note, 'waiting on review');
   h.step(31e3); h.restart(); eq(h.row('a').note, 'waiting on review');
-  h.answers.push(undefined); await h.send({ type: 'editNote', id: a.id });
-  eq(h.row('a').note, 'waiting on review', 'Esc leaves it as it was');
-  h.answers.push('pricing answered'); await h.send({ type: 'editNote', id: a.id });
+  await h.send({ type: 'note', id: a.id, text: 'pricing answered' });
   eq(h.row('a').note, 'pricing answered');
   await h.send({ type: 'note', id: a.id, text: '' });
-  eq(h.row('a').note, '', 'Remove note');
+  eq(h.row('a').note, '', 'Remove note, or an empty box');
 });
 
 withHarness('note: every window sees it, it is capped at 200 characters, and anything not text is refused', async h => {
@@ -1088,6 +1086,74 @@ withHarness('note: every window sees it, it is capped at 200 characters, and any
   }
   await h.send({ type: 'note', id: a.id, text: 'x'.repeat(250) });
   eq(h.row('a').note.length, 200);
+});
+
+// ---- the one-line recap: ASKED / NOW, by a small model after each turn ---------------
+
+const { readRecap } = require('../recap');
+const RECAP = JSON.stringify({ asked: 'Fix the walk recorder dropping the last screenshot', now: 'Merged into the Desk\'s branch; good to close' });
+
+withHarness('recap: written after a turn ends from what it was asked and its reply, kept, and not rewritten until a new turn', async h => {
+  h.config.recaps = true; h.recapReply(RECAP);
+  const a = h.session('a', { transcript: [L.said('Fix the walk recorder: it drops the last screenshot'), L.text('Fixed it and merged into the Desk branch.')] });
+  h.session('quiet'); // no transcript: nothing to recap
+  h.start(); await h.recapsDone();
+  same(h.row('a').recap, { asked: 'Fix the walk recorder dropping the last screenshot', now: 'Merged into the Desk\'s branch; good to close' });
+  eq(h.row('quiet').recap, null);
+  const calls = h.recapCalls();
+  eq(calls.length, 1, 'one call');
+  assert.match(calls[0], /Fix the walk recorder: it drops the last screenshot/);
+  assert.match(calls[0], /Fixed it and merged into the Desk branch\./);
+  assert.match(calls[0], /Session name: a/);
+  const args = JSON.parse(fs.readFileSync(path.join(h.home, 'recap-args.json'), 'utf8'));
+  eq(args[args.indexOf('--model') + 1], 'haiku', 'Haiku by default'); eq(args[args.indexOf('--tools') + 1], '', 'no tools');
+  eq(h.snapshot().rows.find(r => r.id === a.id).asked, 'Fix the walk recorder dropping the last screenshot', 'read-sessions sees it');
+  h.step(); h.step(60e3); await h.recapsDone();
+  eq(h.recapCalls().length, 1, 'nothing new: no new call');
+  // A new turn: running, it waits; once it ends, a fresh recap.
+  h.transcript('a', [L.said('now open the PR', { at: h.now })]); a.set('busy'); h.step(); await h.recapsDone();
+  eq(h.recapCalls().length, 1, 'not while it is running');
+  h.recapReply(JSON.stringify({ asked: 'Fix the walk recorder and open its PR', now: 'PR open; waiting on checks' }));
+  h.transcript('a', [L.text('PR #12 is open.')]); a.set('idle'); h.step(); await h.recapsDone();
+  eq(h.recapCalls().length, 2);
+  assert.match(h.recapCalls()[1], /now open the PR/, 'the latest request goes in');
+  eq(h.row('a').recap.now, 'PR open; waiting on checks');
+  h.restart(); eq(h.row('a').recap.now, 'PR open; waiting on checks', 'kept through a restart');
+});
+
+withHarness('recap: a message from another session counts as a request; one model call at a time', async h => {
+  h.config.recaps = true; h.recapReply(RECAP);
+  h.session('s', { transcript: [L.peer('Please re-queue the flaky runner jobs', h.now, 'desk-24'), L.text('Re-queued 3.')] });
+  h.session('t', { transcript: [L.said('Sort the failures'), L.text('Sorted.')] });
+  h.session('u', { transcript: [L.said('Check the deploy'), L.text('Deployed.')] });
+  h.start(); await h.recapsDone();
+  eq(h.recapCalls().length, 3);
+  assert.match(h.recapCalls().find(c => /Session name: s/.test(c)), /\(message from session desk-24\) Please re-queue the flaky runner jobs/);
+  for (const n of ['s', 't', 'u']) assert.ok(h.row(n).recap, n + ' has its line');
+});
+
+withHarness('recap: a failed or unreadable answer leaves no line and is not retried on every look; off in settings, no calls', async h => {
+  h.config.recaps = true; h.recapReply('', 1);
+  h.session('a', { transcript: [L.said('Do the thing'), L.text('Done.')] });
+  h.start(); await h.recapsDone();
+  eq(h.row('a').recap, null); eq(h.recapCalls().length, 1);
+  h.recapReply('Sure! Here is a summary of the session.');
+  h.step(); h.step(); await h.recapsDone();
+  eq(h.recapCalls().length, 1, 'not again within ten minutes');
+  h.step(11 * 60e3); await h.recapsDone();
+  eq(h.recapCalls().length, 2, 'tried again later'); eq(h.row('a').recap, null, 'prose without JSON: no line');
+  h.config.recaps = false; h.recapReply(RECAP);
+  h.step(11 * 60e3); await h.recapsDone();
+  eq(h.recapCalls().length, 2, 'off: no calls');
+});
+
+test('recap: the answer is read leniently and cut to one short line', () => {
+  same(readRecap('Here you go:\n{"asked": "Ship it", "now": "Shipped"}\nThanks'), { asked: 'Ship it', now: 'Shipped' });
+  same(readRecap(JSON.stringify({ asked: '  two\nlines ', now: '"quoted"' })), { asked: 'two lines', now: 'quoted' });
+  eq(readRecap('{"asked": "x".repeat(3)}'), null);
+  eq(readRecap('{"asked": 1, "now": "y"}'), null);
+  eq(readRecap('no json'), null);
+  eq(readRecap(JSON.stringify({ asked: 'a'.repeat(300), now: 'b' })).asked.length, 120);
 });
 
 // ---- usage view ---------------------------------------------------------------

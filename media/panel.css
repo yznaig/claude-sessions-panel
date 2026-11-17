@@ -144,7 +144,21 @@ h4 { margin: 10px 0 4px; font-weight: 600; color: var(--vscode-descriptionForegr
 .dot.paused:not(.tinted) { opacity: 1; background: transparent; border: 1.5px solid var(--vscode-charts-yellow, #cca700); width: 8px; height: 8px; }
 .state.paused { color: var(--vscode-charts-yellow, #cca700); }
 
-/* your note under a session: its own line from the name column to the row's end, wrapping; it widens
-   no column (contain), so a long note never pushes the names aside */
-.row.noted { padding-bottom: 5px; }
-.row .note { grid-column: 2 / -1; contain: inline-size; min-width: 0; margin-top: 1px; font-size: 0.88em; line-height: 1.35; color: var(--vscode-descriptionForeground); white-space: normal; overflow-wrap: anywhere; }
+/* under the name: the recap (ASKED / NOW) and your note, each a line from the name column to the
+   row's end; they widen no column (contain), so a long line never pushes the names aside */
+.row.lined { padding-bottom: 5px; }
+.row .recap, .row .note, .row .notebox { grid-column: 2 / -1; contain: inline-size; min-width: 0; }
+.row .recap { display: flex; gap: 6px; align-items: baseline; margin-top: 2px; font-size: 0.92em; white-space: nowrap; overflow: hidden; }
+.recap .lbl { flex: none; font-size: 0.72em; letter-spacing: 0.06em; text-transform: uppercase; color: var(--vscode-descriptionForeground); opacity: 0.8; }
+.recap .asked { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; opacity: 0.85; }
+.recap .now { flex: 1 1 0; min-width: 8ch; overflow: hidden; text-overflow: ellipsis; color: var(--vscode-descriptionForeground); }
+.recap .now.ready { color: var(--vscode-testing-iconPassed, #73c991); }
+.recap .now.waiting { color: var(--vscode-charts-blue, #3794ff); }
+.recap .now.busy, .recap .now.watching { color: var(--vscode-progressBar-background, #0e70c0); }
+.recap .now.relayed { color: var(--vscode-charts-purple, #b180d7); }
+.recap .now.closable { color: var(--vscode-charts-red, #f14c4c); }
+.recap .now.paused { color: var(--vscode-charts-yellow, #cca700); }
+.row .note { margin-top: 3px; padding-left: 7px; border-left: 2px solid var(--vscode-charts-yellow, #d7ba7d); font-size: 0.82em; line-height: 1.35; color: var(--vscode-descriptionForeground); white-space: normal; overflow-wrap: anywhere; }
+.row .notebox { display: flex; gap: 8px; align-items: center; margin-top: 3px; }
+.notebox input { flex: 1; min-width: 0; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-focusBorder, #0078d4); border-radius: 3px; padding: 2px 6px; font: inherit; font-size: 0.88em; outline: none; }
+.notebox .hint { flex: none; font-size: 0.8em; color: var(--vscode-descriptionForeground); white-space: nowrap; }

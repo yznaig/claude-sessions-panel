@@ -2,7 +2,7 @@
   "name": "claude-sessions-panel",
   "displayName": "Claude Sessions",
   "description": "A bottom-panel tab listing your live Claude Code sessions: running, response ready (green), needs an answer (blue). Click to focus the session. Plus a Usage view: the current usage windows of every Claude Code and Codex login on the machine.",
-  "version": "0.27.0",
+  "version": "0.28.0",
   "publisher": "yznaig",
   "license": "MIT",
   "author": "yznaig",
@@ -196,6 +196,16 @@
             "required": ["match", "color"]
           },
           "markdownDescription": "Automatic dot colors by the job a session does, read from its name, its title and the role it took in the session hive. Tried in order; the first rule that matches wins, so put topics (database) before generic jobs (builder). A color you pick by right-clicking the dot wins; **Automatic** in that menu hands it back."
+        },
+        "claudeSessions.recaps": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a one-line recap under each session: what it was asked and where it stands, written by a small model (Claude Haiku by default, through your Claude login) each time a session finishes a turn. One short call per finished turn, one at a time."
+        },
+        "claudeSessions.recapModel": {
+          "type": "string",
+          "default": "haiku",
+          "description": "Model that writes the one-line recaps (a claude --model name)."
         },
         "claudeSessions.searchFolders": {
           "type": "array",

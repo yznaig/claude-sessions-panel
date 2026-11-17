@@ -23,13 +23,16 @@ const os = require('os');
 //
 // Turn. When the latest turn began: your last prompt, or the last message another session sent it.
 //
+// Asks. What the session was asked: your first prompt, and the last few prompts or messages from
+// other sessions (what the one-line recap is written from, recap.js).
+//
 // Watching. The background commands (run_in_background, Monitor) started and not yet reported
 // finished by a task notification: what a session done with its turn is waiting on.
 //
 // Each transcript is read once, then only the bytes added since.
 
 const transcriptCache = new Map(); // sessionId -> entry
-const FRESH = { offset: 0, tail: '', custom: null, ai: null, checking: false, closed: false, closedAt: 0, reply: '', pending: null, turnAt: 0, turnByPeer: false };
+const FRESH = { offset: 0, tail: '', custom: null, ai: null, checking: false, closed: false, closedAt: 0, reply: '', pending: null, turnAt: 0, turnByPeer: false, first: '', asks: null };
 
 // Your time for a reply: reading at WORDS_PER_MIN, plus MIN_PER_DECISION for each numbered item.
 const WORDS_PER_MIN = 230;
@@ -65,6 +68,15 @@ function blocksOf(r) {
 
 // Background commands still running, by tool call id -> the command's description.
 const pendingOf = entry => entry.pending || (entry.pending = new Map());
+
+// A request kept for the recap: tags (IDE notes, command wrappers) dropped, one line, cut short.
+const ASKS_KEPT = 3;
+function keepAsk(entry, text, from) {
+  const t = String(text).replace(/<(ide_[a-z_]+|system-reminder)>[\s\S]*?<\/\1>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t) return;
+  if (!entry.first && !from) entry.first = t.slice(0, 2000);
+  entry.asks = [...(entry.asks || []), (from ? `(message from session ${from}) ` : '') + t.slice(0, 600)].slice(-ASKS_KEPT);
+}
 const BACKGROUND_STARTED = /^(Command running in background|Monitor started)/;
 const isBackground = b => b && b.type === 'tool_use' && b.input &&
   (b.name === 'Monitor' || (b.name === 'Bash' && b.input.run_in_background === true));
@@ -103,7 +115,15 @@ function scanLine(entry, line) {
   const blocks = blocksOf(r);
   if (r.type === 'user') {
     // Another session's message starts a turn too (Claude Code records it as a meta line).
-    if (r.isMeta) { if (r.origin && r.origin.kind === 'peer') { entry.turnAt = Date.parse(r.timestamp) || entry.turnAt; entry.turnByPeer = true; } return; }
+    if (r.isMeta) {
+      if (r.origin && r.origin.kind === 'peer') {
+        entry.turnAt = Date.parse(r.timestamp) || entry.turnAt; entry.turnByPeer = true;
+        const said = blocks.filter(b => b && b.type === 'text').map(b => String(b.text || '')).join(' ');
+        const m = /<cross-session-message[^>]*>([\s\S]*?)<\/cross-session-message>/.exec(said);
+        keepAsk(entry, m ? m[1] : said, r.origin.name || 'another session');
+      }
+      return;
+    }
     const texts = blocks.filter(b => b && b.type === 'text').map(b => String(b.text || '').trim()).filter(Boolean);
     const text = texts.join(' ');
     // A background command finished (or failed, or was stopped).
@@ -117,6 +137,7 @@ function scanLine(entry, line) {
     if (!typed) return;                                                 // a reminder or notice, not the person
     entry.turnAt = Date.parse(r.timestamp) || entry.turnAt;
     entry.turnByPeer = false;
+    keepAsk(entry, text);
     entry.checking = text.indexOf('<command-name>/' + CLOSE_SKILL) >= 0;
     entry.closed = false;
     entry.closedAt = 0;

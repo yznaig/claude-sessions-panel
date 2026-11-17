@@ -9,6 +9,9 @@
   const DRAG_TYPE = 'application/x-claude-session';
   let state = null;
   let menu = null;
+  // The note being typed under a row: { id, value }. While it is open the list isn't redrawn, so
+  // the panel's own updates never take the box away mid-word.
+  let noteEdit = null;
 
   function age(ms) {
     const s = Math.max(0, Math.round(ms / 1000));
@@ -137,9 +140,9 @@
     }
     items.push('-', { label: 'Parked (other sessions don\'t message it)', checked: !!r.parked, run: () => post({ type: 'park', id: r.id }) });
     items.push({ label: 'Dot color…', run: () => colorMenu(r, x, y) });
-    // A note of your own, shown under the row (typed in VS Code's input box).
-    if (r.note) items.push({ label: 'Edit note…', run: () => post({ type: 'editNote', id: r.id }) }, { label: 'Remove note', run: () => post({ type: 'note', id: r.id, text: '' }) });
-    else items.push({ label: 'Add note…', run: () => post({ type: 'editNote', id: r.id }) });
+    // A note of your own, typed in a box that opens under the row.
+    if (r.note) items.push({ label: 'Edit note', run: () => editNote(r) }, { label: 'Remove note', run: () => post({ type: 'note', id: r.id, text: '' }) });
+    else items.push({ label: 'Add note', run: () => editNote(r) });
     items.push('-', { label: removeLabel(r), run: () => post({ type: 'dismiss', id: r.id }) });
     openMenu(x, y, items);
   }
@@ -228,15 +231,56 @@
     x.title = r.dismissed ? 'Bring back' : removeLabel(r);
     x.addEventListener('click', ev => { ev.stopPropagation(); post({ type: r.dismissed ? 'restore' : 'dismiss', id: r.id }); });
     d.appendChild(x);
-    // Your note: a line of its own under the name, as wide as the row; the row grows to hold it.
-    if (r.note) {
-      const n = el('div', 'note', '📝 ' + r.note);
+    // Under the name: what it was asked and where it stands (written by a small model after each
+    // turn), then your note. Each is a line as wide as the row; the row grows to hold them.
+    if (r.recap) d.appendChild(recapLine(r, kind));
+    if (noteEdit && noteEdit.id === r.id) d.appendChild(noteBox(r, d));
+    else if (r.note) {
+      const n = el('div', 'note', r.note);
       n.title = r.note + '\n(right-click the session to edit or remove the note)';
       d.appendChild(n);
-      d.classList.add('noted');
     }
+    if (r.recap || r.note || (noteEdit && noteEdit.id === r.id)) d.classList.add('lined');
     d.addEventListener('click', () => post({ type: 'focus', id: r.id }));
     return d;
+  }
+
+  // ASKED: the job it was started for. NOW: where it stands, in the row's state color.
+  function recapLine(r, kind) {
+    const line = el('div', 'recap');
+    if (r.recap.asked) { line.appendChild(el('span', 'lbl', 'asked')); line.appendChild(el('span', 'asked', r.recap.asked)); }
+    if (r.recap.now) { line.appendChild(el('span', 'lbl', 'now')); line.appendChild(el('span', 'now ' + kind, r.recap.now)); }
+    line.title = (r.recap.asked ? 'Asked: ' + r.recap.asked + '\n' : '') + (r.recap.now ? 'Now: ' + r.recap.now : '') + '\n(a one-line recap, rewritten each time its turn ends)';
+    return line;
+  }
+
+  // ---- your note: typed in place ----
+  function editNote(r) { noteEdit = { id: r.id, value: r.note || '' }; render(); }
+  function endNote(save) {
+    if (!noteEdit) return;
+    const { id, value } = noteEdit;
+    noteEdit = null;
+    if (save) post({ type: 'note', id, text: value });
+    render();
+  }
+  function noteBox(r, d) {
+    d.draggable = false; // so dragging inside the box selects text
+    const box = el('div', 'notebox');
+    const input = el('input');
+    input.type = 'text'; input.maxLength = 200; input.value = noteEdit.value;
+    input.placeholder = 'A note for yourself: what to check, what it waits on…';
+    input.addEventListener('input', () => { noteEdit.value = input.value; });
+    input.addEventListener('keydown', ev => {
+      ev.stopPropagation();
+      if (ev.key === 'Enter') { ev.preventDefault(); endNote(true); }
+      if (ev.key === 'Escape') { ev.preventDefault(); endNote(false); }
+    });
+    input.addEventListener('blur', () => { if (noteEdit && noteEdit.id === r.id) endNote(true); });
+    for (const t of ['click', 'mousedown', 'dblclick', 'contextmenu']) input.addEventListener(t, ev => ev.stopPropagation());
+    box.appendChild(input);
+    box.appendChild(el('span', 'hint', 'Enter saves · Esc cancels · empty removes'));
+    setTimeout(() => { if (document.body.contains(input) && document.activeElement !== input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); } }, 0);
+    return box;
   }
 
   // A tab per folder, Main first. Each shows its count, and a dot when a session in it wants you.
@@ -304,6 +348,7 @@
     bar.appendChild(moon);
     bar.appendChild(el('span', '', state.soundOn ? '🔔 sounds on' : '🔕 sounds off'));
     list.hidden = dismissedEl.hidden = search.open;
+    if (noteEdit && !search.open && list.querySelector('.notebox')) return; // typing a note: leave the list be
     list.replaceChildren();
     if (!shown.length) {
       let msg = 'No live Claude sessions here. Start one and it appears when it first runs.';
