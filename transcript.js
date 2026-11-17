@@ -75,7 +75,7 @@ function keepAsk(entry, text, from) {
   const t = String(text).replace(/<(ide_[a-z_]+|system-reminder)>[\s\S]*?<\/\1>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   if (!t) return;
   if (!entry.first && !from) entry.first = t.slice(0, 2000);
-  entry.asks = [...(entry.asks || []), (from ? `(message from session ${from}) ` : '') + t.slice(0, 600)].slice(-ASKS_KEPT);
+  entry.asks = [...(entry.asks || []), (from ? `(message from session ${from}) ` : '') + t.slice(0, 1500)].slice(-ASKS_KEPT);
 }
 const BACKGROUND_STARTED = /^(Command running in background|Monitor started)/;
 const isBackground = b => b && b.type === 'tool_use' && b.input &&
