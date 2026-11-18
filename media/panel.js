@@ -250,7 +250,7 @@
     const line = el('div', 'recap');
     if (r.recap.asked) { line.appendChild(el('span', 'lbl', 'asked')); line.appendChild(el('span', 'asked', r.recap.asked)); }
     if (r.recap.now) { line.appendChild(el('span', 'lbl', 'now')); line.appendChild(el('span', 'now ' + kind, r.recap.now)); }
-    line.title = (r.recap.asked ? 'Asked: ' + r.recap.asked + '\n' : '') + (r.recap.now ? 'Now: ' + r.recap.now : '') + '\n(a one-line recap, rewritten each time its turn ends)';
+    line.title = (r.recap.asked ? 'Asked: ' + r.recap.asked + '\n' : '') + (r.recap.now ? 'Now: ' + r.recap.now : '') + '\n(a recap, rewritten each time its turn ends)';
     return line;
   }
 

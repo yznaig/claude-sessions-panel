@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.28.1 — 2026-11-17
+**ASKED over NOW.** The recap's two halves shared one line, so both were cut off on any panel narrower than the two together. Now ASKED and NOW each get a line, their texts lined up behind the labels, and each is cut off only where the row ends. A faint hairline under every session keeps its stacked lines reading as one session.
+
 ## 0.28.0 — 2026-11-17
 **A one-line recap under every session.** With the hive starting sessions all day, a name like `walk-recorder-fix` no longer said what it was for. Each row now has a line under the name: **ASKED** the job it was started for, **NOW** where it stands, the NOW half in the row's state color (layout B of a three-way prototype, decision e1117-40). Claude Haiku writes it each time a session finishes a turn (e1117-41), from your first request, the last three requests (a message from another session counts), and the latest reply; `claude -p` with no tools, one call at a time, a failed call tried again after 10 minutes, not on every look. The line is kept in globalState (`claudeSessions.recaps`), so every window shows it and a restart keeps it, and the snapshot carries `asked` and `now` for read-sessions. Settings: `claudeSessions.recaps` (on by default) and `claudeSessions.recapModel` (`haiku`); they need one window reload after installing.
 **Notes are typed in place.** Right-click → **Add note** opens a box right under the row instead of VS Code's input box at the top of the window (e1117-33): Enter saves, Esc cancels, clicking away saves, empty removes. The list holds still while you type. The note sits under the recap in smaller text behind an amber bar. 124 tests.
