@@ -8,7 +8,7 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
    it on any row, the name first (it gives way only when the panel is too narrow for all of them), and
    the room left over goes to the time-chip column, between the star and the state. What a session
    watches lies across that room and widens nothing past a short minimum (.state.wide). */
-#list, #dismissed { display: grid; grid-template-columns: 14px minmax(80px, max-content) auto auto minmax(auto, 1fr) auto auto auto auto; column-gap: 8px; }
+#list, #dismissed { display: grid; grid-template-columns: 20px minmax(80px, max-content) auto auto minmax(auto, 1fr) auto auto auto auto; column-gap: 8px; }
 #list[hidden], #dismissed[hidden] { display: none; }
 #list > *, #dismissed > * { grid-column: 1 / -1; }
 .row { display: grid; grid-template-columns: subgrid; align-items: center; padding: 4px 6px; border-radius: 4px; cursor: pointer; }
@@ -23,8 +23,16 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
 .dot.ready { opacity: 1; background: var(--vscode-testing-iconPassed, #73c991); box-shadow: 0 0 6px var(--vscode-testing-iconPassed, #73c991); }
 .dot.waiting { opacity: 1; background: var(--vscode-charts-blue, #3794ff); box-shadow: 0 0 6px var(--vscode-charts-blue, #3794ff); animation: pulse 1.2s ease-in-out infinite; }
 /* a color you chose: it fills the dot, and the state keeps its shape (spinner, glow, ring) */
-.dotcell { align-self: stretch; display: flex; align-items: center; justify-content: center; }
+.dotcell { align-self: stretch; display: flex; align-items: center; justify-content: center; cursor: pointer; }
 .dotcell .dot { flex: none; }
+/* on a session row the dot is half again as big as elsewhere (search results), and its own button */
+.row .dotcell .dot { width: 15px; height: 15px; }
+.row .dotcell .dot.busy { width: 12px; height: 12px; border-width: 3px; }
+.row .dotcell .dot.closed, .row .dotcell .dot.asleep, .row .dotcell .dot.offline, .row .dotcell .dot.paused { width: 12px; height: 12px; border-width: 2px; }
+.row .dotcell .dot.watching { width: 20px; height: 15px; }
+.row .dotcell .dot.watching i { width: 4px; height: 4px; }
+.dotcell:hover .dot { outline: 1px solid color-mix(in srgb, var(--vscode-foreground, #ccc) 30%, transparent); outline-offset: 2px; }
+.dotcell:hover .dot.watching { outline: none; }
 .hittop .dot { justify-self: center; }
 .dot.tinted { opacity: 1; background: var(--c); box-shadow: none; }
 .dot.tinted.ready, .dot.tinted.waiting { box-shadow: 0 0 6px var(--c); }

@@ -186,9 +186,12 @@
       (asleep ? '\nAsleep: its process was stopped to free memory. Click to wake it; the conversation resumes.' : '') +
       (r.status === 'watching' ? '\nWatching' + (r.watchingFor ? ': ' + r.watchingFor : ' a background command') + '. It carries on by itself when that finishes.' : '');
     const cell = el('span', 'dotcell');
-    cell.title = 'Right-click for a color' + (r.autoColor && !r.manualColor ? ' (this one is automatic, from its name or role)' : '');
+    cell.title = 'Click for a color' + (r.autoColor && !r.manualColor ? ' (this one is automatic, from its name or role)' : '');
     cell.appendChild(dot(kind, r.color));
-    cell.addEventListener('contextmenu', ev => { ev.preventDefault(); ev.stopPropagation(); colorMenu(r, ev.clientX, ev.clientY); });
+    // A click or right-click on the dot picks its color; a click anywhere else on the row opens the session.
+    const pick = ev => { ev.preventDefault(); ev.stopPropagation(); colorMenu(r, ev.clientX, ev.clientY); };
+    cell.addEventListener('click', pick);
+    cell.addEventListener('contextmenu', pick);
     d.appendChild(cell);
     d.appendChild(el('span', 'name', r.name));
     const repo = el('span', 'repo', clip(r.repo, REPO_LABEL_MAX));

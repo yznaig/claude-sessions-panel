@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.28.3 — 2026-11-17
+**Click the dot for its color.** A plain click on a session's dot now opens the color picker (right-click still does); a click anywhere else on the row opens the session as before. The dot is half again as big on session rows (15 px; the spinner, rings and watching dots grow with it) and shows a faint ring on hover. Search results keep the small dot.
+
 ## 0.28.2 — 2026-11-17
 Session names are bold, so each row's name stands out above its ASKED and NOW lines.
 
