@@ -41,6 +41,8 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.35); } }
 .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* the session's name leads its row, above the recap lines */
+.row .name { font-weight: 600; }
 .repo { font-size: 0.85em; color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-panel-border, #444); border-radius: 8px; padding: 0 6px; white-space: nowrap; }
 .state { font-size: 0.9em; white-space: nowrap; text-align: right; }
 /* what a session watches: it lies across the star, time-chip and state columns, takes the room the

@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.28.2 — 2026-11-17
+Session names are bold, so each row's name stands out above its ASKED and NOW lines.
+
 ## 0.28.1 — 2026-11-17
 **ASKED over NOW.** The recap's two halves shared one line, so both were cut off on any panel narrower than the two together. Now ASKED and NOW each get a line, their texts lined up behind the labels, and each is cut off only where the row ends. A faint hairline under every session keeps its stacked lines reading as one session.
 
