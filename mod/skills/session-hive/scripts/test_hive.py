@@ -40,7 +40,7 @@ class Hive(unittest.TestCase):
         with open(path, 'w') as f:
             f.write('#!/usr/bin/env python3\nimport json, os, sys\n'
                     f'open({self.spawned!r}, "a").write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd()}}) + "\\n")\n'
-                    'print("backgrounded · abcd1234 · " + sys.argv[sys.argv.index("-n") + 1])\n')
+                    'if "-n" in sys.argv: print("backgrounded · abcd1234 · " + sys.argv[sys.argv.index("-n") + 1])\n')
         os.chmod(path, 0o755)
         return path
 
@@ -264,8 +264,17 @@ class Hive(unittest.TestCase):
     def kind_flags(self, flags):
         return flags if '--successor' in flags or '--kind' in flags or 'no-kind' in flags else (*flags, '--kind', self.default_kind)
 
+    def state(self, text='# State\nWhere things stand.\n\n## How we work\n- Plain words.\n', name='state.md'):
+        path = os.path.join(self.home, name)
+        with open(path, 'w') as f:
+            f.write(text)
+        return path
+
     def spawn(self, name, *flags, who='me-0001', brief='Dig into the delay-notice drafts.', full=False):
         flags = tuple(f for f in self.kind_flags(flags) if f != 'no-kind')
+        if '--successor' in flags and '--state' not in flags and 'no-state' not in flags:
+            flags = (*flags, '--state', self.state())   # a successor starts from the state file its session wrote
+        flags = tuple(f for f in flags if f != 'no-state')
         p = self.run_hive('spawn', '--name', name, *flags, stdin=brief, self_id=who, ok=False, full=True)
         return (json.loads(p.stdout), p) if full else json.loads(p.stdout)
 
@@ -572,7 +581,7 @@ class Hive(unittest.TestCase):
         self.assertEqual((kid['parent'], kid['parentId']), ('work-bb', 'peer-0002'), "the successor's children are its own")
         self.assertEqual(kid['route'], {'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'})
         header = self.spawns()[0]['argv'][4].split('## Brief')[0]
-        self.assertIn('You cannot start sub-sessions of your own.', header, 'still one level of children per Desk')
+        self.assertIn('You cannot start sub-sessions of your own, except a successor', header, 'still one level of children per Desk')
 
     def test_a_desk_roles_child_still_cannot_start_its_own(self):
         self.make_peer_a_child()
@@ -679,11 +688,6 @@ class Hive(unittest.TestCase):
         self.assertEqual(p.returncode, 1)
         self.assertIn("kid-cc is work-aa's successor, so it owes work-aa no debrief", p.stderr)
 
-    def test_only_a_desk_holder_starts_a_successor(self):
-        r = self.spawn('desk-next', '--successor')
-        self.assertEqual(r['action'], 'refused')
-        self.assertIn('holds no desk role', r['reason'])
-        self.assertEqual(self.spawns(), [])
 
     def test_a_successor_or_a_desk_holder_owes_no_debrief(self):
         self.kid({'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'})
@@ -1300,6 +1304,147 @@ class Hive(unittest.TestCase):
             self.assertIn('refused while a background task you started is still open', prompt)
             self.assertIn(f'`Paused from sub-session notice-{kind}: waiting on <what>`', prompt)
             self.assertRegex(prompt, r'hive\.py done`')
+
+    # --- results of approved work, self-handoff, closing (retro e1119-29) ---
+
+    def test_the_house_rules_say_results_of_approved_work_are_sent_and_how_long_sessions_hand_off(self):
+        rules = self.run_hive('peers')
+        self.assertIn('a result of work the user approved that another session needs', rules)
+        self.assertIn('is yours to send without asking; tell the user in one line', rules)
+        self.assertIn('A request that asks another session to decide something new, or to change files outside '
+                      'work the user approved, goes to the user first', rules)
+        self.assertNotIn('A request for another session to change files or decide something goes to the user first', rules)
+        self.assertIn('Never post to Slack, email', rules)
+        self.assertIn('**Long sessions hand off on their own:** past 250k tokens of context', rules)
+        self.assertIn('a `## How we work` block', rules)
+        self.assertIn('`spawn --successor --state <file> --name <name>`', rules)
+        self.assertIn("don't ask whether it is time", rules)
+        self.assertIn('`close --name <name>`', rules)
+        self.assertNotIn('{handoff}', rules)
+
+    def test_a_successor_is_refused_until_its_state_file_is_written(self):
+        r = self.spawn('next', '--successor', 'no-state')
+        self.assertIn('starts from a state file', r['reason'])
+        self.assertIn('no state file at', self.spawn('next', '--successor', '--state', '/nowhere/state.md')['reason'])
+        bare = self.state('# State\nWhere things stand.\n', name='bare.md')
+        self.assertIn('has no `## How we work` block', self.spawn('next', '--successor', '--state', bare)['reason'])
+        old = self.state(name='old.md')
+        os.utime(old, (time.time() - 7200, time.time() - 7200))
+        self.assertIn('last written 120 minutes ago', self.spawn('next', '--successor', '--state', old)['reason'])
+        self.assertEqual(self.spawns(), [], 'nothing started')
+
+    def test_a_top_level_session_hands_its_work_to_a_successor_that_reads_its_state_first(self):
+        state = self.state()
+        r = self.spawn('aa-next', '--successor', '--state', state, brief='Carry on from the state file.')
+        self.assertEqual((r['action'], r['state']), ('started', state))
+        header = self.spawns()[0]['argv'][4].split('## Brief')[0]
+        self.assertIn('the successor that work-aa started to carry on its work, carrying on the work the user '
+                      'already approved', header)
+        self.assertIn(f"Read work-aa's state file first: `{state}`. Its How-we-work block holds the method rules", header)
+        self.assertIn('you owe it no debrief', header)
+        kid = self.children_file()[0]
+        self.assertEqual((kid['successor'], kid['route'], kid['state'], kid['successorOfId']),
+                         (True, None, state, 'me-0001'))
+        spawn = [x for x in self.log() if x.get('dir') == 'spawn'][0]
+        self.assertEqual(spawn['state'], state)
+        done = [x for x in self.log() if x.get('dir') == 'done']
+        self.assertEqual([(d['fromId'], d['how']) for d in done], [('me-0001', 'handed off to aa-next')],
+                         'the session that handed off is ready to close')
+        p = subprocess.Popen(['sleep', '60'])
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        self.register(p.pid, 'next-0009', 'aa-next', '/work/repo')
+        mine = self.run_hive('peers', self_id='next-0009')
+        self.assertIn('You are the successor **work-aa** started to carry on its work: you owe it no debrief', mine)
+        self.assertIn(f'its state file is `{state}`, and its How-we-work block binds you too', mine)
+        self.assertNotIn('When your brief is done', mine)
+        self.assertEqual(self.spawn('helper', who='next-0009')['action'], 'started', 'top level, like its predecessor')
+
+    def test_a_sub_sessions_successor_owes_its_parent_the_debrief(self):
+        self.kid(route={'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'})
+        r = self.spawn('kid-next', '--successor', who='kid-0004', brief='Finish the notices.')
+        self.assertEqual(r['action'], 'started')
+        kid = [k for k in self.children_file() if k['name'] == 'kid-next'][0]
+        self.assertEqual((kid['parent'], kid['parentId'], kid['successor'], kid['successorOf'], kid['kind']),
+                         ('work-aa', 'me-0001', False, 'kid-cc', 'errand'))
+        self.assertEqual(kid['route'], {'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'})
+        header = self.spawns()[0]['argv'][4].split('## Brief')[0]
+        self.assertIn("an errand sub-session that work-aa started to carry on kid-cc's brief, which ran out of room", header)
+        self.assertIn("Read kid-cc's state file first", header)
+        self.assertIn('Debrief from sub-session kid-next', header)
+        self.assertIn('falls back to work-aa', header)
+        self.assertIn('successor of kid-cc: errand: Finish the notices.', self.run_hive('log'))
+        self.assertEqual(self.spawn('side', who='kid-0004')['action'], 'refused', 'still one level deep')
+
+    def test_past_the_handoff_mark_each_prompt_says_to_hand_off_until_a_successor_is_started(self):
+        def at(tokens):
+            self.transcript('me-0001', '/work/repo', [{'type': 'assistant', 'message': {'usage': {
+                'input_tokens': 10, 'cache_read_input_tokens': tokens}}}])
+            return self.run_hive('since')
+        self.assertNotIn('handoff mark', at(200_000))
+        said = at(260_000)
+        self.assertIn("This session is at 260k of context, past the hive's 250k handoff mark", said)
+        self.assertIn('`spawn --successor --state <file> --name <name>`', said)
+        self.spawn('aa-next', '--successor')
+        self.assertNotIn('handoff mark', self.run_hive('since'))
+
+    def ready_kid(self, status='idle', kind='interactive'):
+        """kid-cc, a sub-session of work-aa that sent its final debrief."""
+        self.kid()
+        if status != 'idle' or kind != 'interactive':
+            path = [f for f in os.listdir(self.sessions) if 'kid-0004' in open(os.path.join(self.sessions, f)).read()][0]
+            with open(os.path.join(self.sessions, path)) as f:
+                rec = json.load(f)
+            rec.update(status=status, kind=kind, jobId='kidjob01')
+            with open(os.path.join(self.sessions, path), 'w') as f:
+                json.dump(rec, f)
+            return rec
+        return json.load(open(os.path.join(self.sessions, [f for f in os.listdir(self.sessions)
+                                                             if 'kid-0004' in open(os.path.join(self.sessions, f)).read()][0])))
+
+    def test_a_parent_closes_a_sub_session_only_once_it_is_ready_to_close(self):
+        rec = self.ready_kid()
+        p = self.run_hive('close', '--name', 'kid-cc', ok=False, full=True)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn('kid-cc is not ready to close; it has sent no final debrief', p.stderr)
+        self.run_hive('done', self_id='kid-0004')
+        other = self.run_hive('close', '--name', 'kid-cc', self_id='peer-0002', ok=False, full=True)
+        self.assertIn('is not a sub-session of work-bb', other.stderr)
+        said = self.run_hive('close', '--name', 'kid-cc')
+        self.assertIn('Closed kid-cc (its parent; it was ready to close)', said)
+        for _ in range(50):   # the stand-in process ends on the signal
+            try:
+                os.kill(rec['pid'], 0)
+            except OSError:
+                break
+            if open(f"/proc/{rec['pid']}/stat").read().split(') ')[1].startswith('Z'):
+                break
+            time.sleep(0.05)
+        else:
+            self.fail('kid-cc was not stopped')
+        closed = [x for x in self.log() if x.get('dir') == 'closed']
+        self.assertEqual((closed[0]['to'], closed[0]['as']), ('kid-cc', 'its parent'))
+        self.assertIn('closed work-aa closed kid-cc, which was ready to close', self.run_hive('since', self_id='peer-0002'))
+
+    def test_close_refuses_a_busy_or_reopened_sub_session(self):
+        self.ready_kid(status='busy')
+        self.run_hive('done', self_id='kid-0004')
+        self.assertIn('kid-cc is busy, not idle', self.run_hive('close', '--name', 'kid-cc', ok=False, full=True).stderr)
+        self.run_hive('work', '--what', 'git commit', self_id='kid-0004')
+        self.assertIn('started new work after its debrief',
+                      self.run_hive('close', '--name', 'kid-cc', ok=False, full=True).stderr)
+
+    def test_close_stops_a_background_sub_session_with_claude_stop(self):
+        self.ready_kid(kind='bg')
+        self.run_hive('done', self_id='kid-0004')
+        self.assertIn('Closed kid-cc', self.run_hive('close', '--name', 'kid-cc'))
+        self.assertEqual(self.spawns()[-1]['argv'], ['stop', 'kidjob01'])
+
+    def test_the_desk_closes_a_sub_session_its_predecessor_started(self):
+        self.run_hive('role', *self.DESK_ROLE)
+        self.kid(route={'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'})
+        self.run_hive('done', self_id='kid-0004')
+        self.run_hive('role', *self.DESK_ROLE, self_id='peer-0002')   # work-bb is the Desk now
+        self.assertIn('Closed kid-cc (the desk for hire', self.run_hive('close', '--name', 'kid-cc', self_id='peer-0002'))
 
 
 if __name__ == '__main__':
