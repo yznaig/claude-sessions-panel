@@ -38,7 +38,9 @@
   function card(c, s) {
     const box = el('div', 'card' + (c.state !== 'ok' ? ' ' + c.state : '') + (c.limitReached ? ' limited' : ''));
     const top = el('div', 'top');
-    top.append(el('span', 'kind', c.kind === 'claude' ? 'Claude' : 'Codex'), el('span', 'label', c.label));
+    const label = el('span', 'label', c.label);
+    if (c.folders && c.folders.length) label.title = c.folders.length > 1 ? `One account, signed in from ${c.folders.join(' and ')}` : c.folders[0];
+    top.append(el('span', 'kind', c.kind === 'claude' ? 'Claude' : 'Codex'), label);
     if (c.plan) top.append(el('span', 'plan', c.plan));
     box.append(top);
     if (c.email) box.append(el('div', 'email', c.email));

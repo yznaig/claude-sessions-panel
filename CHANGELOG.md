@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.28.4 — 2026-11-19
+**One Usage card per account.** The Usage view made a card for every `~/.claude*` folder with a login, so a second folder signed in to the same account (a runner lane's beside the everyday login) showed up as a second, identical card. Folders whose profile names the same account now share one card, labelled with both folder names (*default + personal*; hover for the folders). The card reads through whichever folder's token hasn't expired, so it is asleep only when all are; Wake renews the first folder. Codex logins are unchanged. 125 tests.
+
 ## session-trail 0.13.2 (companion mod) — 2026-11-19
 **Sit-downs start in the background again.** `claudeSessions.subSessionTabs` is back off in Aaron's settings: the 0.13.0 build had switched it on, so every sit-down opened as a tab over his editor. He wants it to start in the background and open from the panel into the Claude chat sidebar once it's ready. With the setting off, spawn already does that. The `spawn` help text, the session-hive skill and the README now say a sit-down starts in the background, and the skill tells sessions never to switch tabs on for the user. No code change.
 

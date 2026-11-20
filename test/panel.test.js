@@ -1182,6 +1182,48 @@ test('usage: a 429 reads as rate limited, not failed, for Claude and Codex login
   } finally { https.get = get; fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('usage: two folders on one Claude account make one card, read through the folder whose token is live', async () => {
+  const fs = require('fs'), os = require('os'), path = require('path'), https = require('https');
+  const { EventEmitter } = require('events');
+  const usage = require('../usage');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-home-'));
+  const login = (name, token, expiresAt, uuid) => {
+    const dir = path.join(home, name); fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: token, expiresAt } }));
+    const profileFile = name === '.claude' ? path.join(home, '.claude.json') : path.join(dir, '.claude.json');
+    if (uuid) fs.writeFileSync(profileFile, JSON.stringify({ oauthAccount: { accountUuid: uuid, emailAddress: `${uuid}@example.com` } }));
+  };
+  login('.claude', 'old', Date.now() - H, 'acct-a');
+  login('.claude-lane', 'live', Date.now() + H, 'acct-a');
+  login('.claude-other', 'x', Date.now() + H, 'acct-b');
+  login('.claude-bare', 'y', Date.now() + H, null);
+  fs.mkdirSync(path.join(home, '.codex'));
+  fs.writeFileSync(path.join(home, '.codex', 'auth.json'), JSON.stringify({ tokens: { access_token: 't' } }));
+  const get = https.get;
+  const sent = [];
+  https.get = (url, opts, cb) => {
+    sent.push(opts.headers.Authorization);
+    const res = new EventEmitter(); res.statusCode = 200; res.setEncoding = () => {};
+    setImmediate(() => { cb(res); res.emit('data', '{"five_hour":{"utilization":12}}'); res.emit('end'); });
+    return new EventEmitter();
+  };
+  try {
+    const cards = usage.accounts(home);
+    eq(cards.map(c => `${c.kind}:${c.label}`).join(','), 'claude:default + lane,claude:bare,claude:other,codex:default');
+    const merged = cards[0];
+    eq(merged.id, '.claude');
+    eq(merged.members.map(m => m.id).join(','), '.claude,.claude-lane');
+    const r = await usage.readOne(merged);
+    eq(r.state, 'ok'); eq(sent[0], 'Bearer live'); eq(r.email, 'acct-a@example.com');
+    // Every folder expired: the card is asleep, and Wake goes to the first folder.
+    login('.claude-lane2', 'old2', Date.now() - H, 'acct-c');
+    login('.claude-lane3', 'old3', Date.now() - H, 'acct-c');
+    const sleepy = usage.accounts(home).find(c => c.label === 'lane2 + lane3');
+    eq((await usage.readOne(sleepy)).state, 'asleep');
+    eq(sleepy.dir, path.join(home, '.claude-lane2'));
+  } finally { https.get = get; fs.rmSync(home, { recursive: true, force: true }); }
+});
+
 test('usage: the plan tier follows the profile in .claude.json, not the stale sign-in copy', () => {
   const usage = require('../usage');
   const creds = { claudeAiOauth: { subscriptionType: 'max', rateLimitTier: 'default_claude_max_5x' } };

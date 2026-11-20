@@ -5,7 +5,8 @@
 //
 // Accounts are found, not configured: every ~/.claude* folder holding a .credentials.json and
 // every ~/.codex* folder holding a ChatGPT-mode auth.json (the CLAUDE_CONFIG_DIR / CODEX_HOME
-// pattern for running several logins side by side). The token is read from that file and sent
+// pattern for running several logins side by side). Folders signed in to the same Claude account
+// share one card. The token is read from that file and sent
 // only to the service that issued it, the same usage endpoint each CLI calls for /usage or /status.
 // Neither endpoint is documented for outside use; when one changes, its cards show the error.
 //
@@ -51,6 +52,32 @@ function discover(home = os.homedir()) {
     }
   }
   return out.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'claude' ? -1 : 1));
+}
+
+// Two folders signed in to the same Claude account (a runner lane beside the everyday login, say)
+// read the same usage, so they make one card named after both ("default + personal"). Grouped by
+// the profile's accountUuid; a login with no profile stays a card of its own. The card keeps the
+// first folder's id and dir, so its cached reading and Wake carry over.
+function mergeSameAccount(accounts, uuidOf) {
+  const out = [];
+  const byUuid = new Map();
+  for (const a of accounts) {
+    const uuid = a.kind === 'claude' ? uuidOf(a) : null;
+    const card = uuid && byUuid.get(uuid);
+    if (card) {
+      card.members.push(a);
+      card.label = card.members.map(m => m.label).join(' + ');
+      continue;
+    }
+    const fresh = { ...a, members: [a] };
+    if (uuid) byUuid.set(uuid, fresh);
+    out.push(fresh);
+  }
+  return out;
+}
+
+function accounts(home = os.homedir()) {
+  return mergeSameAccount(discover(home), a => claudeProfile(a, home).accountUuid || null);
 }
 
 // ---- parsing (pure) -------------------------------------------------------------
@@ -130,16 +157,28 @@ function getJson(url, headers) {
   });
 }
 
-function claudeProfile(acct) {
-  const file = acct.isDefault ? path.join(os.homedir(), '.claude.json') : path.join(acct.dir, '.claude.json');
+function claudeProfile(acct, home = os.homedir()) {
+  const file = acct.isDefault ? path.join(home, '.claude.json') : path.join(acct.dir, '.claude.json');
   const d = readJson(file);
   return (d && d.oauthAccount) || {};
 }
 
+// Of a card's folders, the first whose token hasn't expired; else the first. Any one reads the
+// account's usage, so a merged card is asleep only when every folder's token is.
+function liveLogin(acct, now = Date.now()) {
+  const members = acct.members || [acct];
+  return members.find(m => {
+    const c = readJson(path.join(m.dir, '.credentials.json'));
+    const o = c && c.claudeAiOauth;
+    return o && o.accessToken && !(o.expiresAt && o.expiresAt < now);
+  }) || members[0];
+}
+
 async function readClaude(acct) {
-  const creds = readJson(path.join(acct.dir, '.credentials.json'));
+  const login = liveLogin(acct);
+  const creds = readJson(path.join(login.dir, '.credentials.json'));
   const o = creds && creds.claudeAiOauth;
-  const profile = claudeProfile(acct);
+  const profile = claudeProfile(login);
   const base = { plan: claudePlan(creds, profile), email: profile.emailAddress || '' };
   if (!o || !o.accessToken) return { ...base, state: 'error', error: 'No login in .credentials.json' };
   if (o.expiresAt && o.expiresAt < Date.now()) return { ...base, state: 'asleep' };
@@ -221,14 +260,15 @@ function start(host) {
     const prev = last[acct.id];
     if (reading.state === 'ok') last[acct.id] = { windows: reading.windows, readAt: now };
     const shown = reading.state === 'ok' ? reading : { ...reading, windows: prev ? prev.windows : [], stale: !!prev, readAt: prev ? prev.readAt : null };
-    return { id: acct.id, kind: acct.kind, label: acct.label, plan: reading.plan || (prev && prev.plan) || '', email: reading.email || '', ...shown, readAt: reading.state === 'ok' ? now : shown.readAt };
+    const folders = (acct.members || [acct]).map(m => `~/${m.id}`);
+    return { id: acct.id, kind: acct.kind, label: acct.label, folders, plan: reading.plan || (prev && prev.plan) || '', email: reading.email || '', ...shown, readAt: reading.state === 'ok' ? now : shown.readAt };
   }
 
   async function refresh(onlyId) {
     if (refreshing && !onlyId) return;
-    const accounts = discover();
+    const found = accounts();
     if (!onlyId) { refreshing = true; push(); }
-    const targets = onlyId ? accounts.filter(a => a.id === onlyId) : accounts;
+    const targets = onlyId ? found.filter(a => a.id === onlyId) : found;
     const readings = await Promise.all(targets.map(readOne));
     const fresh = targets.map((a, i) => cardFor(a, readings[i]));
     if (onlyId) cards = cards.map(c => fresh.find(f => f.id === c.id) || c);
@@ -239,7 +279,7 @@ function start(host) {
   }
 
   async function wake(id) {
-    const acct = discover().find(a => a.id === id);
+    const acct = accounts().find(a => a.id === id);
     if (!acct || acct.kind !== 'claude' || waking.has(id)) return;
     waking.add(id); push();
     const err = await wakeClaude(acct);
@@ -274,4 +314,4 @@ function start(host) {
   };
 }
 
-module.exports = { start, discover, readOne, wakeClaude, claudeWindows, codexWindows, claudePlan, windowName };
+module.exports = { start, discover, accounts, mergeSameAccount, readOne, wakeClaude, claudeWindows, codexWindows, claudePlan, windowName };
