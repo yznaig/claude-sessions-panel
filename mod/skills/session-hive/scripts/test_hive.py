@@ -1048,7 +1048,7 @@ class Hive(unittest.TestCase):
                              self_id=who).strip()
 
     def test_a_short_wait_keeps_the_plain_fold_and_runs_no_screen(self):
-        self.away_for(10 * 60)
+        self.away_for(39 * 60)
         self.decide_as_peer('item one')
         out = self.since_with_prompt('next')
         self.assertIn('Since you last looked', out)
