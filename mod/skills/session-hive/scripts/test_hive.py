@@ -34,11 +34,22 @@ class Hive(unittest.TestCase):
                 f.write(json.dumps(r) + '\n')
 
     def fake_claude(self):
-        """A stand-in for `claude --bg` that records its arguments and answers as the real one does."""
+        """A stand-in for `claude --bg` that records its arguments and answers as the real one does. As `claude -p`
+        (the long-wait screen) it records what it was given and answers with check-answer.json: none fails,
+        "sleep" hangs."""
         self.spawned = os.path.join(self.home, 'spawned.ndjson')
         path = os.path.join(self.home, 'fake-claude')
+        checks, answer = os.path.join(self.home, 'checks.ndjson'), os.path.join(self.home, 'check-answer.json')
         with open(path, 'w') as f:
-            f.write('#!/usr/bin/env python3\nimport json, os, sys\n'
+            f.write('#!/usr/bin/env python3\nimport json, os, sys, time\n'
+                    'if "-p" in sys.argv:\n'
+                    f'    open({checks!r}, "a").write(json.dumps({{"argv": sys.argv[1:], "stdin": sys.stdin.read(), '
+                    '"entry": os.environ.get("CLAUDE_CODE_ENTRYPOINT")}) + "\\n")\n'
+                    f'    if not os.path.exists({answer!r}): sys.exit(1)\n'
+                    f'    s = open({answer!r}).read()\n'
+                    '    if s == "sleep": time.sleep(5)\n'
+                    '    print(json.dumps({"is_error": False, "structured_output": json.loads(s)}))\n'
+                    '    sys.exit(0)\n'
                     f'open({self.spawned!r}, "a").write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd()}}) + "\\n")\n'
                     'if "-n" in sys.argv: print("backgrounded · abcd1234 · " + sys.argv[sys.argv.index("-n") + 1])\n')
         os.chmod(path, 0o755)
@@ -1005,6 +1016,150 @@ class Hive(unittest.TestCase):
         lines = [l for l in self.since().splitlines() if ' role ' in l]
         self.assertEqual(len(lines), 1)
         self.assertLessEqual(len(lines[0]), 200)
+
+    # --- the long-wait screen (Aaron, 11-19: after a wait, a small model passes on only what touches the work) ---
+
+    def away_for(self, seconds, who='me-0001'):
+        """Take the fold now, then backdate the cursor's stamp: the user last prompted `seconds` ago."""
+        self.since('--take', who=who)
+        path = os.path.join(self.home, '.claude', 'session-hive', 'cursors', who + '.json')
+        with open(path) as f:
+            cur = json.load(f)
+        cur['at'] = time.time() - seconds
+        with open(path, 'w') as f:
+            json.dump(cur, f)
+
+    def answer_check(self, relevant):
+        with open(os.path.join(self.home, 'check-answer.json'), 'w') as f:
+            f.write(relevant if isinstance(relevant, str) else json.dumps({'relevant': relevant}))
+
+    def checks(self):
+        try:
+            with open(os.path.join(self.home, 'checks.ndjson')) as f:
+                return [json.loads(l) for l in f]
+        except OSError:
+            return []
+
+    def since_with_prompt(self, prompt, *args, who='me-0001', env_extra=None):
+        return self.run_hive('since', '--take', *args, stdin=prompt, self_id=who, env_extra=env_extra)
+
+    def decide_as_peer(self, text, workspace='/work/repo', area='qa', who='peer-0002'):
+        return self.run_hive('decide', '--words', 'yes', '--workspace', workspace, '--area', area, text,
+                             self_id=who).strip()
+
+    def test_a_short_wait_keeps_the_plain_fold_and_runs_no_screen(self):
+        self.away_for(10 * 60)
+        self.decide_as_peer('item one')
+        out = self.since_with_prompt('next')
+        self.assertIn('Since you last looked', out)
+        self.assertEqual(self.checks(), [])
+
+    def test_after_a_long_wait_only_the_picked_events_reach_the_session_with_why(self):
+        self.away_for(2 * 3600 + 10 * 60)
+        self.decide_as_peer('runner lane uses three accounts', area='runner')
+        self.run_hive('note', 'lunch menu updated', self_id='peer-0002')
+        self.answer_check([{'ref': 'e2', 'why': 'changes the runner plan this session is writing'}])
+        out = self.since_with_prompt('ok, carry on with the runner plan')
+        self.assertIn("The user's last message here was 2 h 10 min ago.", out)
+        self.assertIn('other sessions logged 2 events', out)
+        self.assertRegex(out, r'decided \[e\d{4}-01\] runner: runner lane uses three accounts .* — changes the runner plan')
+        self.assertNotIn('lunch menu', out)
+        self.assertIn('say so in one line first', out)
+        check = self.checks()[0]
+        self.assertIn('ok, carry on with the runner plan', check['stdin'], "the screen reads the user's new message")
+        self.assertRegex(check['stdin'], r'e1\. .*lunch menu updated')
+        self.assertIn('--no-session-persistence', check['argv'])
+        self.assertEqual(check['argv'][check['argv'].index('--model') + 1], 'sonnet')
+        self.assertEqual(check['argv'][check['argv'].index('--effort') + 1], 'medium')
+        self.assertIsNone(check['entry'], 'the screen runs headless, so the hive leaves it out')
+        self.assertEqual(self.since_with_prompt('next'), '', 'the cursor moved: nothing new, no block')
+
+    def test_after_a_long_wait_with_nothing_relevant_one_line_says_so(self):
+        self.away_for(3600)
+        self.run_hive('note', 'lunch menu updated', self_id='peer-0002')
+        self.answer_check([])
+        out = self.since_with_prompt('next')
+        self.assertEqual(out.strip().count('\n'), 0, out)
+        self.assertIn('1 h ago', out)
+        self.assertIn("logged 1 event; a check (sonnet) found none that touch this session's work", out)
+
+    def test_the_screen_passes_on_at_most_eight_picks(self):
+        self.away_for(3600)
+        for i in range(10):
+            self.run_hive('note', f'note {i:02d}', self_id='peer-0002')
+        self.answer_check([{'ref': f'e{i}', 'why': 'x'} for i in range(1, 11)])
+        out = self.since_with_prompt('next')
+        self.assertEqual(sum(1 for l in out.splitlines() if ' note note ' in l), 8, out)
+
+    def test_a_pick_the_screen_made_up_is_ignored(self):
+        self.away_for(3600)
+        self.run_hive('note', 'lunch menu updated', self_id='peer-0002')
+        self.answer_check([{'ref': 'e9', 'why': 'no such event'}])
+        self.assertIn('found none', self.since_with_prompt('next'))
+
+    def test_the_screen_reads_decisions_and_handoffs_from_other_workspaces_too(self):
+        far = self.elsewhere()
+        self.away_for(3600)
+        self.decide_as_peer('drop the cropper', workspace='/elsewhere', who='far-0003')
+        self.run_hive('note', 'a far note', self_id='far-0003')
+        self.answer_check([{'ref': 'e1', 'why': 'touches this work'}])
+        out = self.since_with_prompt('next')
+        self.assertIn('drop the cropper', out)
+        stdin = self.checks()[0]['stdin']
+        self.assertIn('drop the cropper', stdin)
+        self.assertNotIn('a far note', stdin, "another workspace's notes stay out")
+        self.assertIsNotNone(far)
+
+    def test_a_failed_or_slow_screen_falls_back_to_the_plain_fold_with_the_gap(self):
+        self.away_for(3600)
+        self.decide_as_peer('item one')
+        out = self.since_with_prompt('next')   # no answer file: the screen exits 1
+        self.assertIn('1 h ago', out)
+        self.assertIn('could not run', out)
+        self.assertIn('item one', out)
+        self.away_for(3600)
+        self.decide_as_peer('item two')
+        self.answer_check('sleep')
+        out = self.since_with_prompt('next', env_extra={'HIVE_CHECK_SECONDS': '1'})
+        self.assertIn('could not run', out)
+        self.assertIn('item two', out)
+
+    def test_after_a_long_wait_with_no_news_one_line_gives_the_gap_and_no_screen_runs(self):
+        self.away_for(45 * 60)
+        self.assertEqual(self.since_with_prompt('next').strip(),
+                         "[session hive] The user's last message here was 45 min ago. Nothing happened in the hive since.")
+        self.assertEqual(self.checks(), [])
+
+    def test_a_first_look_has_no_gap_so_no_screen(self):
+        self.decide_as_peer('item one')
+        out = self.since_with_prompt('next')
+        self.assertIn('Since you last looked', out)
+        self.assertEqual(self.checks(), [])
+
+    def test_a_file_this_session_worked_with_that_changed_since_its_last_reply_is_screened(self):
+        mine = os.path.join(self.home, 'plan.md')
+        other = os.path.join(self.home, 'untouched.md')
+        for p in (mine, other):
+            with open(p, 'w') as f:
+                f.write('v1\n')
+        ended = time.time() - 600
+        stamp = time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(ended)) + 'Z'
+        self.transcript('me-0001', '/work/repo', [
+            {'type': 'user', 'message': {'content': 'write the runner plan'}},
+            {'type': 'assistant', 'timestamp': stamp, 'message': {'content': [
+                {'type': 'text', 'text': 'Plan written.'},
+                {'type': 'tool_use', 'name': 'Edit', 'input': {'file_path': mine}},
+                {'type': 'tool_use', 'name': 'Read', 'input': {'file_path': other}}]}}])
+        os.utime(other, (ended - 60, ended - 60))   # last changed before the reply ended: not news
+        self.away_for(3600)
+        self.answer_check([{'ref': 'f1', 'why': 'its own plan was edited by someone else'}])
+        out = self.since_with_prompt('next')
+        self.assertIn(f'{mine} changed on disk at', out)
+        self.assertIn('— its own plan was edited', out)
+        stdin = self.checks()[0]['stdin']
+        self.assertIn('write the runner plan', stdin)
+        self.assertIn('Plan written.', stdin)
+        self.assertNotIn(f'{other} changed', stdin)
 
     def test_a_sub_sessions_debrief_is_an_allowed_message(self):
         self.assertIn("a sub-session's one-line debrief or paused note (to the session its first message names)", self.run_hive('peers'))

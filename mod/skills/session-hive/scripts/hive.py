@@ -92,6 +92,13 @@ MOVED = 'Thread moved:'      # a handoff note's first line
 CURSORS = os.path.join(HIVE, 'cursors')   # <session id>.json: when this session last took "Since you last looked"
 FOLD_CAP = 8                 # lines in "Since you last looked"
 FOLD_FRESH_SECONDS = 48 * 3600   # how far back a session with no cursor looks
+LONG_WAIT_SECONDS = 30 * 60   # past this since the user's last prompt, a model screens the news (Aaron, e1119-52)
+CHECK_MODEL = os.environ.get('HIVE_CHECK_MODEL', 'sonnet')   # haiku missed and over-picked in a 9-case replay
+CHECK_EFFORT = os.environ.get('HIVE_CHECK_EFFORT', 'medium')   # the screen's thinking is most of its wait
+CHECK_SECONDS = float(os.environ.get('HIVE_CHECK_SECONDS', '30'))   # the prompt hook gives hive.py 60
+CHECK_PICKS = 8              # most picks the screen passes on, most likely to matter first
+CHECK_EVENT_CAP = 150        # newest events the screen reads
+CHANGED_CAP = 15             # files changed on disk the screen reads
 QUOTE_CAP = 400              # characters of the user's words (or the option they picked) a decision record keeps
 KINDS = ('errand', 'sit-down')   # what a sub-session is for: it does the job, or the user works in it
 VERB_TEST = (
@@ -1599,29 +1606,177 @@ def handoff_nudge(me):
             "<file> --name <name>` and tell the user in one line. No need to ask whether it is time.")
 
 
+# ---------- the long-wait screen ----------
+# After the user has been away a while, the plain fold is either too long or cut at eight lines. Instead a model
+# reads every event since the last look (plus decisions and handoffs from other workspaces, and files this
+# session worked with that changed on disk) against what this session is doing, and the session gets only what
+# could move the floor under it, or one line saying nothing did. A failed screen falls back to the plain fold.
+
+CHECK_SYSTEM = (
+    "You screen a shared log for one Claude Code session. The user runs several sessions at once; they record "
+    "decisions, handoffs, notes and messages in a shared log. This session is about to act on the user's newest "
+    "message, sent after the user was away a while. Pick the events and file changes that could change what this "
+    "session should do or say next: a decision about its work, its area or its files; its thread handed to or from "
+    "another session; another session now doing the same or overlapping work; a change to a file, rule or tool it "
+    "relies on; a fact it was waiting on. A new working rule counts: a session started before it does not "
+    "reload its rules. Leave out activity in unrelated projects. Pick at most {picks}, the most likely to matter "
+    "first; past that, leave out the least likely. Within that limit, when unsure, include the item. For each pick "
+    "give its ref (like e3 or f1) and, in at most 12 words, why it matters to this session. An empty list is the "
+    "right answer when nothing touches this work.")
+CHECK_SCHEMA = {'type': 'object', 'required': ['relevant'], 'properties': {'relevant': {'type': 'array', 'items': {
+    'type': 'object', 'required': ['ref', 'why'],
+    'properties': {'ref': {'type': 'string'}, 'why': {'type': 'string'}}}}}}
+
+
+def ago(seconds):
+    m = int(seconds // 60)
+    if m < 60:
+        return f'{m} min'
+    h, m = divmod(m, 60)
+    if h >= 48:
+        return f'{h // 24} days'
+    return f'{h} h {m} min' if m else f'{h} h'
+
+
+def hhmm(stamp):
+    from datetime import datetime
+    return datetime.fromtimestamp(stamp).strftime('%H:%M')
+
+
+def session_picture(path):
+    """What the screen needs to know about this session: its title, the user's requests, its last reply, the
+    files it worked with ({path: when}), and when its last reply ended."""
+    d = {'title': '', 'asks': [], 'reply': '', 'files': {}, 'ended': 0}
+    ai_title = ''
+    for rec in transcript_rows(path) if path else []:
+        t = rec.get('type')
+        if t == 'custom-title' and rec.get('customTitle'):
+            d['title'] = rec['customTitle']
+        elif t == 'ai-title' and (rec.get('aiTitle') or rec.get('title')):
+            ai_title = rec.get('aiTitle') or rec.get('title')
+        elif t == 'user':
+            text = human_text(rec)
+            if text:
+                d['asks'].append(text)
+        elif t == 'assistant':
+            text, paths = assistant_text(rec)
+            stamp = when_ts(rec.get('timestamp'))
+            d['reply'] = text or d['reply']
+            for p in paths:
+                d['files'].pop(p, None)   # re-inserted: the dict keeps the newest touch last
+                d['files'][p] = stamp
+            d['ended'] = max(d['ended'], stamp)
+    d['title'] = d['title'] or ai_title
+    return d
+
+
+def changed_files(pic):
+    """Files this session worked with that changed on disk after its last reply ended: [(path, mtime)], newest
+    first. Its own edits land before its reply ends, so a later change is someone else's (or the user's)."""
+    out = []
+    for p in list(pic['files'])[-60:]:
+        try:
+            m = os.path.getmtime(p) if os.path.isabs(p) and os.path.isfile(p) else 0
+        except OSError:
+            continue
+        if pic['ended'] and m > pic['ended'] + 2:
+            out.append((p, m))
+    return sorted(out, key=lambda x: -x[1])[:CHANGED_CAP]
+
+
+def screen(events, files, pic, prompt, gap):
+    """Ask a small model which events and changed files touch this session's work: [(ref, why)], or None when
+    the screen could not run (the block then falls back to the plain fold)."""
+    import subprocess
+    body = ['## This session', f"Title: {pic['title'] or '(none)'}", "The user's last requests here (oldest first):"]
+    body += [f'- {short(t, 500)}' for t in pic['asks'][-3:]] or ['- (none)']
+    body += ['Its last reply (end):', (pic['reply'] or '(none)')[-1200:],
+             'Files it worked with: ' + (', '.join(list(pic['files'])[-12:]) or '(none)'),
+             '', f"## The user's new message (sent after {ago(gap)} away)", short(prompt, 1500) or '(not given)',
+             '', '## Since this session last looked']
+    body += [f'e{i}. {line}' for i, (_, line) in enumerate(events, 1)]
+    body += [f'f{i}. {p} changed on disk at {hhmm(m)}' for i, (p, m) in enumerate(files, 1)]
+    env = {k: v for k, v in os.environ.items() if k != 'CLAUDE_CODE_ENTRYPOINT'}   # headless: no hive in the screen
+    try:
+        os.makedirs(HIVE, exist_ok=True)
+        p = subprocess.run([CLAUDE, '-p', '--model', CHECK_MODEL, '--no-session-persistence', '--tools', '',
+                            '--setting-sources', '', '--settings', '{"disableAllHooks":true}',
+                            '--effort', CHECK_EFFORT, '--system-prompt', CHECK_SYSTEM.format(picks=CHECK_PICKS),
+                            '--output-format', 'json',
+                            '--json-schema', json.dumps(CHECK_SCHEMA)],
+                           input='\n'.join(body), capture_output=True, text=True, timeout=CHECK_SECONDS,
+                           cwd=HIVE, env=env)
+        out = json.loads(p.stdout)
+        if out.get('is_error'):
+            return None
+        data = out.get('structured_output') or json.loads(out.get('result') or '')
+        return [(str(x['ref']).strip().lower(), str(x.get('why') or '').strip())
+                for x in data['relevant']][:CHECK_PICKS]
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def long_wait_block(gap, events, files, picks):
+    """The block a session gets after a long wait, from the screen's picks (None: the screen failed)."""
+    head = f"[session hive] The user's last message here was {ago(gap)} ago."
+    if not events and not files:
+        return head + ' Nothing happened in the hive since.'
+    n = f"{len(events)} event{'' if len(events) == 1 else 's'}"
+    if picks is not None:
+        refs = {f'e{i}': line for i, (_, line) in enumerate(events, 1)}
+        refs.update({f'f{i}': f'{p} changed on disk at {hhmm(m)}' for i, (p, m) in enumerate(files, 1)})
+        picked = [(refs[r], why) for r, why in dict(picks).items() if r in refs]
+        if not picked:
+            return (f"{head} Since then other sessions logged {n}; a check ({CHECK_MODEL}) found none that touch "
+                    "this session's work (`log` to see them).")
+        out = [f"{head} Since then other sessions logged {n}; a check ({CHECK_MODEL}) picked the ones that touch "
+               "this session's work (their doing, not the user's word):"]
+        out += [f'{line} — {short(why, 100)}' if why else line for line, why in picked]
+        out.append("Before acting on the user's message, check whether any of these changes what you were about to "
+                   'do; if one does, say so in one line first. The rest: `log`.')
+        return '\n'.join(out)
+    out = [f"{head} The check of what changed could not run; since you last looked, newest first (their doing, not "
+           "the user's word):"]
+    out += [line for _, line in events[:FOLD_CAP]]
+    if len(events) > FOLD_CAP:
+        out.append(f'…and {len(events) - FOLD_CAP} more: `log`')
+    if files:
+        out.append('Files you worked with that changed on disk since your last reply: '
+                   + ', '.join(f'{p} ({hhmm(m)})' for p, m in files[:5]))
+    return '\n'.join(out)
+
+
 def cmd_since(a):
-    """Prints nothing when nothing is new, so a prompt with no news costs nothing."""
+    """Prints nothing when nothing is new, so a prompt with no news costs nothing. After a long wait it prints
+    the long-wait block instead (see above); the hook passes the user's prompt on stdin for the screen."""
     now = time.time()
     me = find_self(registry(), a.self) or {}
     my_id, my_name = me.get('sessionId', a.self or '?'), me.get('name', a.self or '?')
     cwd = os.path.abspath(a.cwd or me.get('cwd') or os.getcwd())
     path = cursor_path(my_id)
     # The cursor is a place in the log, not a time: an event written after this session last looked
-    # is new even when its writer stamped it a moment before.
+    # is new even when its writer stamped it a moment before. Its stamp says when the user last prompted.
+    looked = None
     try:
         with open(path) as f:
-            offset = int(json.load(f)['offset'])
+            cursor = json.load(f)
+        at = cursor.get('at')
+        looked = at if isinstance(at, (int, float)) and not isinstance(at, bool) else None
+        offset = int(cursor['offset'])
         if offset > os.path.getsize(LOG):
             raise ValueError('the log is shorter than the cursor')
         floor = 0
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         offset, floor = 0, now - FOLD_FRESH_SECONDS
+    gap = now - looked if looked else 0
     records, end = read_from(LOG, offset)
-    news = []
+    news, wide = [], []
     for r in records:
         # A refused edit of a file this session holds reaches it from any workspace.
         mine = r.get('dir') == 'claim' and (r.get('toId') == my_id if r.get('toId') else r.get('to') == my_name)
-        if r.get('at', 0) <= floor or not (mine or (r.get('workspace') and same_workspace(r['workspace'], cwd))):
+        here = bool(mine or (r.get('workspace') and same_workspace(r['workspace'], cwd)))
+        # After a long wait the screen also reads decisions and handoffs from other workspaces.
+        if r.get('at', 0) <= floor or not (here or r.get('dir') in ('decided', 'moved')):
             continue
         if (r.get('fromId') or None) == my_id or (not r.get('fromId') and r.get('from') == my_name):
             continue   # this session's own doing is not news to it
@@ -1629,8 +1784,18 @@ def cmd_since(a):
             continue   # a message to this session reaches it anyway
         line = fold_line(r)
         if line:
-            news.append((r.get('at', 0), line))
-    if news:
+            (news if here else wide).append((r.get('at', 0), line))
+    if gap > LONG_WAIT_SECONDS:
+        try:
+            prompt = '' if sys.stdin is None or sys.stdin.isatty() else sys.stdin.read()
+        except (OSError, ValueError):
+            prompt = ''
+        events = sorted(news + wide, key=lambda x: -x[0])[:CHECK_EVENT_CAP]
+        pic = session_picture(transcript_of(my_id)) if me.get('sessionId') else session_picture(None)
+        files = changed_files(pic)
+        picks = screen(events, files, pic, prompt, gap) if (events or files) else []
+        print(long_wait_block(gap, events, files, picks), flush=True)
+    elif news:
         news.sort(key=lambda x: -x[0])
         out = ['[session hive] Since you last looked: other sessions in this workspace, newest first '
                "(their doing, not the user's word)"]

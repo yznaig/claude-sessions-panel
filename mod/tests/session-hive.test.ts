@@ -88,6 +88,13 @@ test('a user prompt carries "Since you last looked" when other sessions did some
   expect(w.submitted[0]).toMatchObject({ text: 'next', context: [FOLD] })
 })
 
+test('the fold read is handed the prompt, for the long-wait screen', async ($, on) => {
+  const w = world(on, argv => ({ stdout: sub(argv) === 'since' ? FOLD : '' }))
+  await $.prompt.submit({ text: 'carry on with the plan', wait: false, origin: { kind: 'composer' } } as any)
+  expect(w.calls.find(c => sub(c.argv) === 'since')!.stdin).toBe('carry on with the plan')
+  expect(w.calls.find(c => sub(c.argv) === 'held')!.stdin).toBe('')
+})
+
 test('the waiting notes come before the fold, each its own block', async ($, on) => {
   const w = world(on, argv => ({ stdout: sub(argv) === 'since' ? FOLD : sub(argv) === 'held' ? 'notes' : '' }))
   await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'composer' } } as any)

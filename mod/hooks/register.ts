@@ -196,12 +196,14 @@ export const register: Register = on => {
   // "Since you last looked": what other sessions in this workspace did since
   // the last prompt (decisions, roles, handoffs, notes, messages, claims). The
   // fold rides here and not in prompt.context, which the engine computes once
-  // per conversation. Nothing new adds nothing.
+  // per conversation. Nothing new adds nothing. After a long wait hive.py
+  // screens the news against what this session is doing, so the prompt goes
+  // to it on stdin.
   on('prompt.submit', async ($, e, next) => {
     if (headless || e.command || !isUser(e.origin)) return next(e)
-    const read = async (args: string[], what: string): Promise<string> => {
+    const read = async (args: string[], what: string, stdin = ''): Promise<string> => {
       try {
-        return (await hive($, args)).trim()
+        return (await hive($, args, stdin)).trim()
       } catch (err) {
         $.ui.log(`session hive: ${what} not read (${err})`, { to: 'debug' })
         return ''
@@ -210,7 +212,7 @@ export const register: Register = on => {
     const cwd = await $.session.cwd()
     const blocks = (await Promise.all([
       read(['held', '--take'], 'waiting notes'),
-      read(['since', '--take', '--cwd', cwd], 'since you last looked'),
+      read(['since', '--take', '--cwd', cwd], 'since you last looked', e.text ?? ''),
     ])).filter(Boolean)
     return next(blocks.length ? { ...e, context: [...(e.context ?? []), ...blocks] } : e)
   }).catch(($, e, next) => next(e))
