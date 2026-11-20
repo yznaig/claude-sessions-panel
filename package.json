@@ -177,7 +177,7 @@
         "claudeSessions.subSessionTabs": {
           "type": "boolean",
           "default": false,
-          "description": "Open session-hive sub-sessions as Claude Code tabs in this window (they start on their brief by themselves) instead of in the background. Off: they start in the background, and a click opens one here once its turn ends or while it watches a background command."
+          "description": "Open session-hive sit-downs as Claude Code tabs in this window (they start on their brief by themselves) instead of in the background. Off: they start in the background, and a click opens one here once its turn ends or while it watches a background command."
         },
         "claudeSessions.autoColors": {
           "type": "array",

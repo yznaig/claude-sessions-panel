@@ -13,9 +13,9 @@
                                   moon), no cap on how many; --successor (desk holders) starts the session that takes
                                   the role, and needs no kind. Every other spawn names its kind or is refused with
                                   the verb test: an errand does the job and debriefs, in the background (`claude
-                                  --bg`); a sit-down does its prep and waits for the user, as a Claude Code tab
-                                  when a Claude Sessions panel has this folder open and the user isn't away, else
-                                  in the background, and debriefs when its end goal is done
+                                  --bg`); a sit-down does its prep and waits for the user, in the background
+                                  (the user opens it from their panel), and debriefs when its end goal is done;
+                                  a Claude Code tab only if the user switched claudeSessions.subSessionTabs on
   resumed                         for a session just opened in VS Code: the note the Claude Sessions panel left
                                   when it stopped the session's background watch to bring it in (once; empty
                                   when there is none)

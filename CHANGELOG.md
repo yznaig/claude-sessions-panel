@@ -1,5 +1,8 @@
 # Changelog
 
+## session-trail 0.13.2 (companion mod) — 2026-11-19
+**Sit-downs start in the background again.** `claudeSessions.subSessionTabs` is back off in Aaron's settings: the 0.13.0 build had switched it on, so every sit-down opened as a tab over his editor. He wants it to start in the background and open from the panel into the Claude chat sidebar once it's ready. With the setting off, spawn already does that. The `spawn` help text, the session-hive skill and the README now say a sit-down starts in the background, and the skill tells sessions never to switch tabs on for the user. No code change.
+
 ## 0.28.3 — 2026-11-17
 **Click the dot for its color.** A plain click on a session's dot now opens the color picker (right-click still does); a click anywhere else on the row opens the session as before. The dot is half again as big on session rows (15 px; the spinner, rings and watching dots grow with it) and shows a faint ring on hover. Search results keep the small dot.
 
