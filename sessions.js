@@ -96,7 +96,8 @@ class Saved {
   }
   entry(id) { return this.known.get(id); }
   // Stopped while this window kept running: ended on purpose, so not shown as "not running".
-  // Not when the panel put it to sleep: that keeps its place.
+  // Not when the panel put it to sleep, or Claude Code retired a background session still waiting on
+  // you: those keep their place.
   endedHere(id, cwd, liveIds) { return this.ranHere.has(id) && !liveIds.has(id) && this.scope.owns(cwd) && !this.isAsleep(id); }
 
   // Rebuild after a look at the registry. `live`: [{ entry, keep }] for each running session.
@@ -309,8 +310,10 @@ class Notes {
 // ---- the list ---------------------------------------------------------------------------------
 
 class SessionList {
-  constructor({ store, transcripts, procs, hive, autoColors, scope, now, removedClearMs, autoCloseMs, live, ended }, carried) {
+  constructor({ store, transcripts, procs, hive, autoColors, scope, now, removedClearMs, autoCloseMs, live, ended, parkedJob }, carried) {
     this.hive = hive || null;
+    // A background session Claude Code retired while it waited on you (jobs.js): kept, as asleep.
+    this.parkedJob = parkedJob || (() => null);
     this.autoColors = autoColors || (() => undefined);
     this.store = store;
     this.transcripts = transcripts;
@@ -342,7 +345,7 @@ class SessionList {
     this.colors = new Colors(store);
     this.notes = new Notes(store);
     this.stuck = new Map(); // pid -> when a stop of it did not take
-    this.saved = new Saved(store, scope, carried, upgrade, id => this.asleep.has(id));
+    this.saved = new Saved(store, scope, carried, upgrade, id => this.asleep.has(id) || !!this.parkedJob(id));
     this.folders = new Folders(store);
   }
 
@@ -496,7 +499,7 @@ class SessionList {
   statusOf(id) {
     const r = this.reg(id);
     if (r) return r.status || 'idle';
-    return this.asleep.has(id) ? 'asleep' : null;
+    return this.asleep.has(id) || this.parkedJob(id) ? 'asleep' : null;
   }
 
   stopRisk(id) {
@@ -608,6 +611,9 @@ class SessionList {
 
   offlineRow(e, dismissed, { kept, parked, colors, notes }) {
     const a = this.asleep.get(e.id);
+    // Retired by Claude Code while it waited on you: asleep and still blue, its question shown.
+    const job = a ? null : this.parkedJob(e.id);
+    if (job) return this.parkedRow(e, dismissed, job, { kept, parked, colors, notes });
     let attention = a && a.ready && !dismissed ? 'ready' : null;
     const mark = a && !dismissed ? this.markOf({ sessionId: e.id }) : null;
     const relayedTo = attention && !mark ? this.relayOf({ sessionId: e.id, cwd: e.cwd }) : null;
@@ -621,6 +627,18 @@ class SessionList {
       ...this.dotColor(e.id, colors.get(e.id), [e.handle, this.transcripts.displayName({ sessionId: e.id, cwd: e.cwd, name: e.name })]),
       cost: attention === 'ready' ? this.transcripts.replyCost(this.transcripts.readTranscript({ sessionId: e.id, cwd: e.cwd }).reply) : null,
       relayedTo: relayedTo || '', pausedFor: attention === 'paused' ? mark.what : '', note: notes.get(e.id) || '',
+    };
+  }
+
+  parkedRow(e, dismissed, job, { kept, parked, colors, notes }) {
+    const name = this.transcripts.displayName({ sessionId: e.id, cwd: e.cwd, name: e.name });
+    return {
+      id: e.id, pid: null, name, cwd: e.cwd, repo: path.basename(e.cwd) || '?', status: 'asleep',
+      attention: dismissed ? null : 'waiting', dismissed, handle: e.handle || '', waitingFor: job.needs,
+      since: e.since, startedAt: e.startedAt || e.since, closed: false, folder: this.folders.of(e.id),
+      keep: kept.has(e.id), stopping: false, canStop: false, parked: parked.has(e.id), retired: true,
+      ...this.dotColor(e.id, colors.get(e.id), [e.handle, name]),
+      cost: null, relayedTo: '', pausedFor: '', note: notes.get(e.id) || '',
     };
   }
 

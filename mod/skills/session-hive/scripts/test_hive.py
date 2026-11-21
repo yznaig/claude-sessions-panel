@@ -188,6 +188,48 @@ class Hive(unittest.TestCase):
         self.snapshot([{'id': 'peer-0002', 'folder': 'Workflow'}])
         self.assertNotIn('parked: never message', self.run_hive('peers'))
 
+    def test_peers_lists_a_live_background_session(self):
+        p = subprocess.Popen(['sleep', '30'])
+        try:
+            rec = self.register(p.pid, 'bgkid-0005', 'runner-builder-x', '/work/repo')
+            rec['kind'] = 'bg'
+            with open(os.path.join(self.sessions, f'{p.pid}.json'), 'w') as f:
+                json.dump(rec, f)
+            self.assertIn('**runner-builder-x**', self.run_hive('peers'))
+        finally:
+            p.kill()
+
+    def asleep_kid(self, name, bg, updated, last_turn, state='blocked', needs='ship today?', cwd='/work/repo'):
+        """A background sub-session Claude Code retired: its children.json entry, job file and transcript."""
+        sid = bg + '-aaaa-bbbb'
+        hive = os.path.join(self.home, '.claude', 'session-hive')
+        os.makedirs(hive, exist_ok=True)
+        path = os.path.join(hive, 'children.json')
+        kids = json.load(open(path)) if os.path.exists(path) else []
+        kids.append({'name': name, 'parent': 'work-aa', 'at': time.time(), 'cwd': cwd, 'kind': 'sit-down', 'bgId': bg})
+        with open(path, 'w') as f:
+            json.dump(kids, f)
+        iso = lambda t: time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime(t))
+        self.transcript(sid, cwd, [{'type': 'assistant', 'timestamp': iso(last_turn), 'message': {'content': 'a question'}},
+                                   {'type': 'last-prompt', 'sessionId': sid}])
+        jobs = os.path.join(self.home, '.claude', 'jobs', bg)
+        os.makedirs(jobs, exist_ok=True)
+        with open(os.path.join(jobs, 'state.json'), 'w') as f:
+            json.dump({'state': state, 'needs': needs, 'sessionId': sid, 'updatedAt': iso(updated),
+                       'linkScanPath': os.path.join(self.home, '.claude', 'projects', '-work-repo', sid + '.jsonl')}, f)
+
+    def test_peers_lists_a_sub_session_claude_code_stopped_while_it_waits_on_the_user(self):
+        t = time.time() - 4000
+        self.asleep_kid('ship-day-x', 'aa11bb22', t, t, needs='#1 ship today?')
+        self.asleep_kid('moved-on', 'cc33dd44', t, t + 600)              # opened and answered since
+        self.asleep_kid('finished', 'ee55ff66', t, t, state='done')
+        self.asleep_kid('far-away', 'aa99bb88', t, t, cwd='/elsewhere')
+        out = self.run_hive('peers')
+        self.assertIn('Asleep, waiting on the user', out)
+        self.assertIn('**ship-day-x** — sub-session of work-aa · asks: "#1 ship today?"', out)
+        for name in ('moved-on', 'finished', 'far-away'):
+            self.assertNotIn(f'**{name}**', out)
+
     def test_peers_leaves_other_workspaces_out_but_counts_them(self):
         p = subprocess.Popen(['sleep', '30'])
         try:

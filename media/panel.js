@@ -23,6 +23,7 @@
   function label(r) {
     if (r.closed) return '✓ closed';
     if (r.stopping) return 'stopping…';
+    if (r.status === 'asleep' && r.attention === 'waiting') return (r.waitingFor ? 'needs you: ' + r.waitingFor : 'needs you') + ' · asleep';
     if (r.status === 'asleep') return r.attention === 'ready' ? 'ready · asleep' : r.attention === 'relayed' ? 'recap at ' + r.relayedTo + ' · asleep'
       : r.attention === 'closable' ? 'ready to close · asleep' : r.attention === 'paused' ? 'paused · asleep' : 'asleep';
     if (r.status === 'offline') return 'not running';
@@ -183,7 +184,7 @@
     // The name other sessions know it by (myapp-17), when it isn't just the title shown.
     const known = r.handle && r.handle !== r.name ? (offline || asleep ? 'Was ' : '') + r.handle + '\n' : '';
     d.title = known + r.cwd + '\n' + r.id + (offline ? '\nNot running: click to reopen' : '') +
-      (asleep ? '\nAsleep: its process was stopped to free memory. Click to wake it; the conversation resumes.' : '') +
+      (asleep ? (r.retired ? '\nAsleep: Claude Code stopped it after an hour waiting on you. Click to open it; the conversation resumes.' : '\nAsleep: its process was stopped to free memory. Click to wake it; the conversation resumes.') : '') +
       (r.status === 'watching' ? '\nWatching' + (r.watchingFor ? ': ' + r.watchingFor : ' a background command') + '. It carries on by itself when that finishes.' : '');
     const cell = el('span', 'dotcell');
     cell.title = 'Click for a color' + (r.autoColor && !r.manualColor ? ' (this one is automatic, from its name or role)' : '');

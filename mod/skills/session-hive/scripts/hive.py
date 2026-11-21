@@ -73,6 +73,9 @@ HELD = os.path.join(HIVE, 'held')
 SNAPSHOTS = os.path.join(HOME, '.claude', 'sessions-panel')
 
 LIST_CAP = 8                 # sessions shown at startup
+ASLEEP_CAP = 3               # of those, listed at startup
+ASLEEP_DAYS = 3              # a sub-session Claude Code stopped while it waited on the user is listed this long
+MOVED_ON_S = 60              # a turn this long after its job blocked: the conversation went on elsewhere
 TOKEN_LIMIT = 400_000        # don't wake a session whose context is past this
 BOUNDARY_TOKENS = 150_000    # from here, at a boundary, the session asks whether the next piece of work will fit (e1120-37, 32d)
 HANDOFF_TOKENS = 250_000     # past this a session finishes the thread in hand and starts nothing new (32a, 32c)
@@ -387,7 +390,8 @@ def cmd_peers(a):
     my_id = me.get('sessionId') if me else None
     cwd = os.path.abspath(a.cwd or (me or {}).get('cwd') or os.getcwd())
     parked = parked_ids()
-    others = [r for r in reg.values() if r.get('sessionId') != my_id and r.get('kind', 'interactive') == 'interactive']
+    # `claude --bg` sessions (hive sub-sessions, runner builders) are live and reachable too.
+    others = [r for r in reg.values() if r.get('sessionId') != my_id and r.get('kind', 'interactive') in ('interactive', 'bg')]
     here = [r for r in others if a.all or same_workspace(r.get('cwd'), cwd)]
     elsewhere = len(others) - len(here)
     here.sort(key=lambda r: r.get('updatedAt') or 0, reverse=True)
@@ -454,8 +458,55 @@ def cmd_peers(a):
             out.append(f'…and {len(here) - len(shown)} more; `peers --all` lists every one.')
     if elsewhere and not a.all:
         out.append(f'{elsewhere} more sessions are live in other workspaces (`peers --all`).')
+    asleep = asleep_kids(reg, None if a.all else cwd)
+    if asleep:
+        out.append('\nAsleep, waiting on the user (Claude Code stopped them after an hour without an answer; a '
+                   'message does not reach them, the user opens one to answer it):')
+        for k, needs in asleep[:ASLEEP_CAP]:
+            out.append(f"- **{k.get('name')}** — sub-session of {k.get('parent')}" + (f' · asks: "{short(needs, 140)}"' if needs else ''))
+        if len(asleep) > ASLEEP_CAP:
+            out.append(f'…and {len(asleep) - ASLEEP_CAP} more.')
     print('\n'.join(out))
     return 0
+
+
+def last_turn_at(path):
+    """The newest `timestamp` in a transcript's last lines (Claude Code stopping a session adds only unstamped ones)."""
+    try:
+        with open(path, 'rb') as f:
+            f.seek(max(0, os.path.getsize(path) - 65536))
+            text = f.read().decode('utf-8', 'replace')
+    except OSError:
+        return 0
+    return max((when_ts(t) for t in re.findall(r'"timestamp":\s*"([^"]+)"', text)), default=0)
+
+
+def asleep_kids(reg, cwd):
+    """Background sub-sessions Claude Code retired after an hour waiting on the user (`bg retire …: idle-prompt`):
+    no process, so not live, but their job (~/.claude*/jobs/<bgId>/state.json) is still blocked on the user and the
+    conversation has not moved on since. [(children.json entry, what it asks)], newest first."""
+    live = {r.get('sessionId') for r in reg.values()}
+    found = []
+    for k in children():
+        bg = k.get('bgId')
+        if not bg or (cwd and not same_workspace(k.get('cwd'), cwd)) or time.time() - (k.get('at') or 0) > ASLEEP_DAYS * 86400:
+            continue
+        for f in glob.glob(os.path.join(HOME, '.claude*', 'jobs', bg, 'state.json')):
+            try:
+                with open(f) as fh:
+                    st = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            sid = st.get('sessionId') or ''
+            if st.get('state') != 'blocked' or not sid.startswith(bg) or sid in live:
+                continue
+            at = when_ts(st.get('updatedAt') or '')
+            t = st.get('linkScanPath')
+            if isinstance(t, str) and at and last_turn_at(t) > at + MOVED_ON_S:
+                continue
+            found.append((at, k, st.get('needs') if isinstance(st.get('needs'), str) else ''))
+            break
+    return [(k, needs) for _, k, needs in sorted(found, key=lambda x: -x[0])]
 
 
 # ---------- the log and held notes ----------

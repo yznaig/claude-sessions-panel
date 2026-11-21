@@ -265,6 +265,53 @@ withHarness('a session ended just before VS Code closes still comes back after t
   eq(h.row('e').status, 'offline');
 });
 
+// A background job's record as Claude Code's daemon keeps it (~/.claude/jobs/<first 8>/state.json).
+function bgJob(h, name, { state = 'blocked', needs = 'ship it today?', at = h.now } = {}) {
+  const id = h.id(name);
+  const dir = path.join(h.home, '.claude/jobs', id.slice(0, 8));
+  fs.mkdirSync(dir, { recursive: true });
+  const transcript = path.join(h.home, '.claude/projects', h.proj.replace(/[^a-zA-Z0-9]/g, '-'), id + '.jsonl');
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ state, needs, sessionId: id, updatedAt: new Date(at).toISOString(), linkScanPath: transcript }));
+}
+
+withHarness('a background session Claude Code retires while it waits on you stays listed, asleep and blue', async h => {
+  const s = h.session('parkbg', { bg: true, transcript: [L.stamped('Two questions for you.', h.now)] });
+  h.start();
+  bgJob(h, 'parkbg', { needs: '#1 ship today? #2 replace #908?' });
+  await s.end(); h.step(); h.step(31e3);
+  const r = h.row('parkbg');
+  eq(r.status, 'asleep'); eq(r.attention, 'waiting'); eq(r.waitingFor, '#1 ship today? #2 replace #908?');
+  eq(r.canStop, false);
+  eq(h.badge, 1, 'counts as needing you');
+  h.restart();
+  eq(h.row('parkbg').status, 'asleep', 'still there after VS Code restarts');
+  eq(h.row('parkbg').attention, 'waiting');
+});
+
+withHarness('a retired background session that was carried on elsewhere leaves when it ends, like any session', async h => {
+  const s = h.session('movedbg', { bg: true, transcript: [L.stamped('A question for you.', h.now)] });
+  h.start();
+  bgJob(h, 'movedbg');
+  h.transcript('movedbg', [L.stamped('Done, thanks.', h.now + 5 * 60e3)]); // answered after the job blocked
+  await s.end(); h.step(); h.step(31e3);
+  eq(h.row('movedbg'), undefined);
+});
+
+withHarness('a background job that finished leaves when it ends', async h => {
+  const s = h.session('donebg', { bg: true, transcript: [L.stamped('All done.', h.now)] });
+  h.start();
+  bgJob(h, 'donebg', { state: 'done' });
+  await s.end(); h.step(); h.step(31e3);
+  eq(h.row('donebg'), undefined);
+});
+
+withHarness('old blocked background jobs the panel was not listing do not come back', async h => {
+  h.session('here');
+  bgJob(h, 'oldbg', { at: h.now - 30 * 24 * H });
+  h.start(); h.step();
+  eq(h.row('oldbg'), undefined);
+});
+
 withHarness("another window's stopped sessions follow that window's saved list", h => {
   const id = h.id('far');
   h.globalState.update(OPEN_KEY, [{ id, cwd: h.other, name: 'far', since: h.now, startedAt: h.now }]);

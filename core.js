@@ -63,6 +63,7 @@ function readRegistry(ended) {
 const transcripts = require('./transcript');
 const { displayName } = transcripts;
 const { SessionList } = require('./sessions');
+const jobs = require('./jobs');
 const { Recaps } = require('./recap');
 const { windowScope } = require('./window');
 const { readAway, writeAway } = require('./away');
@@ -691,7 +692,7 @@ function start(host) {
     autoColors: () => cfg().get('autoColors'),
     removedClearMs: () => (cfg().get('removedClearHours') || 12) * 3600e3,
     autoCloseMs: () => { const h = cfg().get('autoCloseHours'); return (typeof h === 'number' && h >= 0 ? h : 4) * 3600e3; },
-    live: readRegistry(), ended: () => readRegistry(true),
+    live: readRegistry(), ended: () => readRegistry(true), parkedJob: jobs.parkedJob,
   }, host.carried);
   // A look at the registry and the trail; plays the sounds the changes call for.
   const look = () => { for (const kind of list.observe(readRegistry(), readTrail())) playSound(kind); };
