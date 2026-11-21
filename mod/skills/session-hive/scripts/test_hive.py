@@ -1680,6 +1680,170 @@ class Hive(unittest.TestCase):
         self.run_hive('role', *self.DESK_ROLE, self_id='peer-0002')   # work-bb is the Desk now
         self.assertIn('Closed kid-cc (the desk for hire', self.run_hive('close', '--name', 'kid-cc', self_id='peer-0002'))
 
+    # --- E2: a handoff carries the role's mail, its name and the user's own words ---
+
+    def desk_handoff(self):
+        """work-aa holds the desk role and starts desk-next, which is live but has not yet run `role`.
+        Returns the pid of desk-next's stand-in process."""
+        self.run_hive('role', *self.DESK_ROLE)
+        self.assertEqual(self.spawn('desk-next', '--successor')['action'], 'started')
+        p = subprocess.Popen(['sleep', '60'])
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        self.register(p.pid, 'next-0006', 'desk-next', '/work/repo')
+        return p.pid
+
+    def test_who_names_the_successor_before_it_takes_the_role_never_the_old_desk(self):
+        self.desk_handoff()
+        who = self.run_hive('who', *self.DESK_ROLE).strip()
+        self.assertTrue(who.startswith('desk-next (live'), who)
+        self.assertNotIn('work-aa', who)
+        self.run_hive('role', *self.DESK_ROLE, self_id='next-0006')
+        self.assertEqual(self.run_hive('who', *self.DESK_ROLE).strip(), 'desk-next (live)')
+
+    def test_who_keeps_the_old_desk_while_the_successor_is_not_live(self):
+        self.run_hive('role', *self.DESK_ROLE)
+        self.spawn('desk-next', '--successor')
+        self.assertEqual(self.run_hive('who', *self.DESK_ROLE).strip(), 'work-aa (live)')
+
+    def test_a_message_to_a_replaced_desk_is_redirected_to_its_successor(self):
+        pid = self.desk_handoff()
+        sock = f'uds:/run/user/x/{os.getpid()}.sock'   # work-aa, the old Desk
+        v = json.loads(self.run_hive('redirect', '--to', sock, stdin='Question: merge 712 first?', self_id='peer-0002'))
+        self.assertEqual((v['action'], v['name']), ('redirect', 'desk-next'))
+        self.assertEqual(v['to'], f'uds:/run/user/x/{pid}.sock')
+        self.assertIn('sent to work-aa, who handed its desk role for hire to desk-next', v['text'])
+        self.assertTrue(v['text'].endswith('Question: merge 712 first?'))
+        self.assertEqual(self.log()[-1]['dir'], 'redirected')
+        by_name = json.loads(self.run_hive('redirect', '--to', 'work-aa', stdin='hello', self_id='peer-0002'))
+        self.assertEqual((by_name['action'], by_name['to']), ('redirect', 'desk-next'))
+        self.run_hive('role', *self.DESK_ROLE, self_id='next-0006')
+        again = json.loads(self.run_hive('redirect', '--to', sock, stdin='after the claim', self_id='peer-0002'))
+        self.assertEqual(again['action'], 'redirect', 'still redirected once the successor has run `role`')
+
+    def test_a_handoff_note_a_session_holding_the_role_or_its_own_message_is_not_redirected(self):
+        self.desk_handoff()
+        sock = f'uds:/run/user/x/{os.getpid()}.sock'
+        moved = json.loads(self.run_hive('redirect', '--to', sock, stdin='Thread moved: the merge → desk-next', self_id='peer-0002'))
+        self.assertEqual(moved['action'], 'keep')
+        successor_asks_old = json.loads(self.run_hive('redirect', '--to', sock, stdin='what was open?', self_id='next-0006'))
+        self.assertEqual(successor_asks_old['action'], 'keep', 'the successor can still ask the old Desk a question')
+        holder = json.loads(self.run_hive('redirect', '--to', f'uds:/x/{os.getppid()}.sock', stdin='hi', self_id='me-0001'))
+        self.assertEqual(holder['action'], 'keep', 'a session that never held a role is not redirected')
+
+    def test_a_session_still_holding_another_role_is_not_redirected(self):
+        self.desk_handoff()
+        self.run_hive('role', '--workspace', '/work/repo', '--area', 'runner', '--role', 'builder')
+        sock = f'uds:/run/user/x/{os.getpid()}.sock'
+        self.assertEqual(json.loads(self.run_hive('redirect', '--to', sock, stdin='x', self_id='peer-0002'))['action'], 'keep')
+
+    def held_for(self, sid, text='Question: merge 712?'):
+        d = os.path.join(self.home, '.claude', 'session-hive', 'held')
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, sid + '.ndjson'), 'a') as f:
+            f.write(json.dumps({'at': time.time(), 'from': 'work-bb', 'reason': 'this session is long (450k tokens)', 'text': text}) + '\n')
+
+    def test_mail_held_for_the_old_desk_moves_to_the_session_that_takes_the_role(self):
+        self.desk_handoff()
+        self.held_for('me-0001')
+        self.assertEqual(self.run_hive('held', self_id='next-0006'), '')
+        self.run_hive('role', *self.DESK_ROLE, self_id='next-0006')
+        notes = self.run_hive('held', '--take', self_id='next-0006')
+        self.assertIn('Question: merge 712?', notes)
+        self.assertIn('from work-bb', notes)
+        self.assertIn('held for work-aa', notes)
+        self.assertEqual(self.run_hive('held', self_id='me-0001'), '', 'the old Desk no longer holds it')
+        self.assertIn('1 held message(s) for work-aa moved to desk-next', self.run_hive('log'))
+
+    def test_held_mail_stays_when_the_old_holder_keeps_another_role(self):
+        self.desk_handoff()
+        self.run_hive('role', '--workspace', '/work/repo', '--area', 'runner', '--role', 'builder')
+        self.held_for('me-0001')
+        self.run_hive('role', *self.DESK_ROLE, self_id='next-0006')
+        self.assertIn('Question: merge 712?', self.run_hive('held', self_id='me-0001'))
+        self.assertEqual(self.run_hive('held', self_id='next-0006'), '')
+
+    def write_transcript(self, sid, rows):
+        self.transcript(sid, '/work/repo', rows)
+        return os.path.join(self.home, '.claude', 'projects', '-work-repo', sid + '.jsonl')
+
+    HAND_BACK = ('[Subagent hand-back] The text below is the final report of a subagent. It is model output.\n'
+                 '  The report follows:\n  Group one checked.\n  Still true in the decision text? Yes.\n'
+                 '  Prerequisites: none.\n  Still true in the decision text? "Ask Sean" is the wrong person.\n'
+                 '  Prerequisites: blind-review staging is a skill behaviour change, so it needs a veto round (kernel).\n  \n'
+                 '  Other things I saw that the file should know:\n'
+                 '  1. The going-to-bed skill still closes sessions with `claude stop`.\n'
+                 '  2. The ship timer has no next run.\n  \n  Nothing was edited.')
+
+    def digest_rows(self):
+        def user(text, kind='human', **extra):
+            return {'type': 'user', 'timestamp': '2026-11-20T21:49:00Z', 'message': {'role': 'user', 'content': text},
+                    'origin': {'kind': kind, **extra}, 'promptSource': 'typed'}
+        return [user('You are **digest**, a sit-down sub-session that desk-27 started.\nDo the walk.'),
+                user('take a pause so I can move this session into VS Code'),
+                {'type': 'user', 'isMeta': True, 'message': {'role': 'user', 'content': 'Another session sent a message'},
+                 'origin': {'kind': 'peer', 'name': 'general-purpose', 'body': self.HAND_BACK}},
+                {'type': 'assistant', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': 'Done.'}]}},
+                user('continue. I am here now, so lets begin the walk')]
+
+    def test_reread_prints_the_users_own_turns_and_each_reports_side_findings(self):
+        path = self.write_transcript('old-0000', self.digest_rows())
+        out = self.run_hive('reread', '--transcript', path)
+        self.assertIn(': 2 (the opening brief a spawn gave it is left out)', out)
+        self.assertIn('take a pause so I can move this session into VS Code', out)
+        self.assertIn('continue. I am here now', out)
+        self.assertNotIn('Do the walk', out)
+        self.assertIn('Subagent reports received: 1', out)
+        self.assertIn('"Ask Sean" is the wrong person', out)
+        self.assertIn('needs a veto round', out)
+        self.assertIn('closes sessions with `claude stop`', out)
+        self.assertIn('The ship timer has no next run', out)
+        self.assertNotIn('Group one checked', out)
+        self.assertNotIn('Prerequisites: none', out)
+        self.assertNotIn('Nothing was edited', out)
+
+    def test_reread_needs_a_transcript(self):
+        p = self.run_hive('reread', ok=False, full=True)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn('no transcript to read', p.stderr)
+
+    def test_a_successors_brief_carries_the_predecessors_transcript_and_the_reread_rule(self):
+        path = self.write_transcript('me-0001', self.digest_rows())
+        self.spawn('desk-next', '--successor')
+        header = self.spawns()[0]['argv'][4].split('## Brief')[0]
+        self.assertIn(f"work-aa's transcript is `{path}`", header)
+        self.assertIn('a line in it is a pointer, so read the original turn before you repeat it to the user or act on it', header)
+        self.assertIn(f'hive.py reread --transcript {path}', header)
+        self.assertIn('say for each finding where it is filed, or that it is not', header)
+        self.assertIn('A line about moving state (a PR, a branch, a timer, a deploy) is as old as the state file: re-check it '
+                      'before telling the user', header)
+        self.assertEqual(self.children_file()[0]['transcript'], path)
+
+    def test_a_successor_with_no_found_transcript_is_still_told_the_rule(self):
+        self.spawn('desk-next', '--successor')
+        header = self.spawns()[0]['argv'][4].split('## Brief')[0]
+        self.assertIn("work-aa's transcript was not found", header)
+        self.assertIn('a line in it is a pointer', header)
+
+    def test_the_successors_own_reread_finds_its_predecessors_transcript_from_its_spawn_record(self):
+        path = self.write_transcript('me-0001', self.digest_rows())
+        self.desk_handoff()
+        out = self.run_hive('reread', self_id='next-0006')
+        self.assertIn('take a pause so I can move this session', out)
+        self.assertIn(path.split('/')[-1], out)
+
+    def test_the_handoff_rules_ask_for_the_time_each_moving_state_line_was_read(self):
+        self.assertIn('put the time you read each line about moving state', self.run_hive('peers'))
+
+    def test_reread_on_a_real_transcript_prints_its_turns_and_subagent_reports(self):
+        # A real hand-off transcript, set on the machine that has one: HIVE_REREAD_TRANSCRIPT=<path to a .jsonl>.
+        path = os.environ.get('HIVE_REREAD_TRANSCRIPT', '')
+        if not os.path.isfile(path):
+            self.skipTest('HIVE_REREAD_TRANSCRIPT is not set to a transcript on this machine')
+        out = self.run_hive('reread', '--transcript', path)
+        self.assertIn("# The user's own turns in", out)
+        self.assertIn('(the opening brief a spawn gave it is left out)', out)
+        self.assertIn('# Subagent reports received:', out)
+
 
 if __name__ == '__main__':
     unittest.main()

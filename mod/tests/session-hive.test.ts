@@ -142,9 +142,9 @@ test('the first message carries the house rules and the peer list', async ($, on
 test('a message this session sends is logged', async ($, on) => {
   const w = world(on, () => ({ stdout: '' }))
   await $.session.send({ to: 'api-b8', text: 'FYI: TICKET-11 queued', origin: { kind: 'model' } })
-  expect(sub(w.calls[0]!.argv)).toBe('sent')
-  expect(w.calls[0]!.argv).toContain('api-b8')
-  expect(w.calls[0]!.stdin).toBe('FYI: TICKET-11 queued')
+  expect(w.calls.map(c => sub(c.argv))).toEqual(['redirect', 'sent'])
+  expect(w.calls[1]!.argv).toContain('api-b8')
+  expect(w.calls[1]!.stdin).toBe('FYI: TICKET-11 queued')
 })
 
 test('only the five-hour window is handed over for holding; the weekly one goes to the list', async ($, on) => {
@@ -299,6 +299,22 @@ test('a VS Code session with no note left for it asks nothing', async ($, on) =>
   expect(w.submitted).toEqual([])
 })
 
+test('a message to a session that handed its role on goes to the holder, and is logged as sent there', async ($, on) => {
+  const w = world(on, argv => ({ stdout: sub(argv) === 'redirect' ? JSON.stringify({ action: 'redirect', to: 'desk-31', text: '[session hive: redirected]\n\nQuestion: merge 712?' }) : '' }))
+  await $.session.send({ to: 'desk-30', text: 'Question: merge 712?', origin: { kind: 'model' } })
+  expect(w.sends).toBe(1)
+  expect(w.calls.map(c => sub(c.argv))).toEqual(['redirect', 'sent'])
+  expect(w.calls[1]!.argv).toContain('desk-31')
+  expect(w.calls[1]!.stdin).toBe('[session hive: redirected]\n\nQuestion: merge 712?')
+})
+
+test('a failed redirect lookup sends the message as addressed', async ($, on) => {
+  const w = world(on, argv => (sub(argv) === 'redirect' ? { exitCode: 1 } : { stdout: '' }))
+  await $.session.send({ to: 'desk-30', text: 'Question: merge 712?', origin: { kind: 'model' } })
+  expect(w.sends).toBe(1)
+  expect(w.calls[1]!.argv).toContain('desk-30')
+})
+
 // Ready to close: a final debrief is checked for open background tasks before it goes; new work clears the mark.
 
 const DEBRIEF_TEXT = 'Debrief from sub-session ship-3: PR 712 merged, notes in docs/ship.md'
@@ -308,16 +324,16 @@ test('a final debrief hive.py refuses is not sent, and the session reads why', a
   const r = await $.session.send({ to: 'desk-4', text: DEBRIEF_TEXT, origin: { kind: 'model' } })
   expect(r).toMatchObject({ isDelivered: false, reason: expect.stringContaining('Poll deploy') })
   expect(w.sends).toBe(0)
-  expect(w.calls.map(c => sub(c.argv))).toEqual(['check'])
-  expect(w.calls[0]!.stdin).toBe(DEBRIEF_TEXT)
+  expect(w.calls.map(c => sub(c.argv))).toEqual(['redirect', 'check'])
+  expect(w.calls[1]!.stdin).toBe(DEBRIEF_TEXT)
 })
 
 test('a final debrief hive.py allows is sent and logged as sent, which marks it', async ($, on) => {
   const w = world(on, argv => ({ stdout: sub(argv) === 'check' ? JSON.stringify({ action: 'allow' }) : '' }))
   const r = await $.session.send({ to: 'desk-4', text: DEBRIEF_TEXT, origin: { kind: 'model' } })
   expect(r.isDelivered).toBe(true)
-  expect(w.calls.map(c => sub(c.argv))).toEqual(['check', 'sent'])
-  expect(w.calls[1]!.argv).not.toContain('--undelivered')
+  expect(w.calls.map(c => sub(c.argv))).toEqual(['redirect', 'check', 'sent'])
+  expect(w.calls[2]!.argv).not.toContain('--undelivered')
 })
 
 test('a debrief whose check failed still goes; one that was not delivered is logged as such', async ($, on) => {
@@ -325,15 +341,15 @@ test('a debrief whose check failed still goes; one that was not delivered is log
   w.undelivered = 'nobody by that name'
   const r = await $.session.send({ to: 'desk-9', text: DEBRIEF_TEXT, origin: { kind: 'model' } })
   expect(r).toMatchObject({ isDelivered: false, reason: 'nobody by that name' })
-  expect(w.calls.map(c => sub(c.argv))).toEqual(['check', 'sent'])
-  expect(w.calls[1]!.argv).toContain('--undelivered')
+  expect(w.calls.map(c => sub(c.argv))).toEqual(['redirect', 'check', 'sent'])
+  expect(w.calls[2]!.argv).toContain('--undelivered')
 })
 
 test('a question or progress note to the Desk is not checked', async ($, on) => {
   const w = world(on, () => ({ stdout: '' }))
   await $.session.send({ to: 'desk-4', text: 'Question: merge 712 before 713?', origin: { kind: 'model' } })
   await $.session.send({ to: 'desk-4', text: '[keep going] Debrief from sub-session ship-3: 712 merged, 713 next', origin: { kind: 'model' } })
-  expect(w.calls.map(c => sub(c.argv))).toEqual(['sent', 'sent'])
+  expect(w.calls.map(c => sub(c.argv))).toEqual(['redirect', 'sent', 'redirect', 'sent'])
 })
 
 test('a background command, a commit, a PR and a Monitor or Agent are new work; a plain command is not', async ($, on) => {

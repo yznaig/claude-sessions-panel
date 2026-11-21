@@ -219,6 +219,14 @@ export const register: Register = on => {
 
   on('session.send', async ($, e, next) => {
     if (e.agentId || headless) return next(e)
+    // A message to a session that handed its role on (a replaced Desk) goes to the role's live holder instead.
+    // A failed lookup sends it as addressed.
+    try {
+      const v = JSON.parse(await hive($, ['redirect', '--to', e.to], e.text)) as { action: string; to?: string; text?: string }
+      if (v.action === 'redirect' && v.to && v.text) e = { ...e, to: v.to, text: v.text }
+    } catch (err) {
+      $.ui.log(`session hive: redirect not checked (${err})`, { to: 'debug' })
+    }
     if (DEBRIEF.test(e.text)) {
       try {
         const verdict = JSON.parse(await hive($, ['check', '--to', e.to], e.text)) as { action: string; message?: string }
