@@ -520,6 +520,7 @@ class SessionList {
       const id = r.sessionId;
       if ((r.status || 'idle') !== 'idle' || this.attention.get(id) === 'waiting') continue;
       if (kept.has(id) || this.asleep.has(id) || !this.stoppable(r)) continue;
+      if (this.hive && this.hive.keepsRow && this.hive.keepsRow(id)) continue;   // a sit-down waits for the user until its debrief
       if (now - (this.stuck.get(r.pid) || -Infinity) < STUCK_RETRY_MS) continue;
       const t = trail.get(id);
       // On screen in some window: Claude Code would show an error banner in its place.

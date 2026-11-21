@@ -294,11 +294,11 @@ let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
   }
   recapsDone() { return this.app.recapsIdle(); }
 
-  hiveChild(name, parent) {
+  hiveChild(name, parent, extra = {}) {
     const file = path.join(this.home, '.claude/session-hive/children.json');
     let kids = [];
     try { kids = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* first */ }
-    kids.push({ name, bgId: 'b' + name, parent, parentId: 'p', unattended: false, at: this.now / 1000, cwd: this.proj });
+    kids.push({ name, bgId: 'b' + name, parent, parentId: 'p', unattended: false, at: this.now / 1000, cwd: this.proj, ...extra });
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, J(kids));
   }

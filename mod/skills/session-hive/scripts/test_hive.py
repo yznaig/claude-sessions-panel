@@ -275,7 +275,7 @@ class Hive(unittest.TestCase):
     def kind_flags(self, flags):
         return flags if '--successor' in flags or '--kind' in flags or 'no-kind' in flags else (*flags, '--kind', self.default_kind)
 
-    def state(self, text='# State\nWhere things stand.\n\n## How we work\n- Plain words.\n', name='state.md'):
+    def state(self, text='# State\nWhere things stand.\n\n## How we work\n- Plain words.\n\nskills in use: none\n', name='state.md'):
         path = os.path.join(self.home, name)
         with open(path, 'w') as f:
             f.write(text)
@@ -292,7 +292,7 @@ class Hive(unittest.TestCase):
     def test_a_sub_session_starts_in_the_background_knowing_its_parent(self):
         r = self.spawn('notice drafts')
         self.assertEqual(r, {'action': 'started', 'name': 'notice-drafts', 'where': 'background', 'id': 'abcd1234',
-                             'kind': 'errand'})
+                             'kind': 'errand', 'jobDir': os.path.join(self.home, '.claude', 'jobs', 'abcd1234')})
         argv = self.spawns()[0]['argv']
         self.assertEqual(argv[:4], ['--bg', '-n', 'notice-drafts', '--'])
         self.assertIn("an errand sub-session that work-aa started with the user's yes", argv[4])
@@ -1549,12 +1549,18 @@ class Hive(unittest.TestCase):
                       'work the user approved, goes to the user first', rules)
         self.assertNotIn('A request for another session to change files or decide something goes to the user first', rules)
         self.assertIn('Never post to Slack, email', rules)
-        self.assertIn('**Long sessions hand off on their own:** past 250k tokens of context', rules)
+        self.assertIn('**Long sessions hand off on their own:** from 150k tokens of context', rules)
+        self.assertIn('Past 250k, finish the thread in hand and start nothing new. At 350k, hand off whatever is left', rules)
+        self.assertIn('close (the new work starts fresh in a new session, no state file); an errand', rules)
+        self.assertIn('a `skills in use: …` line', rules)
         self.assertIn('a `## How we work` block', rules)
         self.assertIn('`spawn --successor --state <file> --name <name>`', rules)
         self.assertIn("don't ask whether it is time", rules)
         self.assertIn('`close --name <name>`', rules)
         self.assertNotIn('{handoff}', rules)
+        self.assertNotIn('{boundary}', rules)
+        self.assertNotIn('{ceiling}', rules)
+        self.assertNotIn('mid-landing', rules)
 
     def test_a_successor_is_refused_until_its_state_file_is_written(self):
         r = self.spawn('next', '--successor', 'no-state')
@@ -1562,6 +1568,10 @@ class Hive(unittest.TestCase):
         self.assertIn('no state file at', self.spawn('next', '--successor', '--state', '/nowhere/state.md')['reason'])
         bare = self.state('# State\nWhere things stand.\n', name='bare.md')
         self.assertIn('has no `## How we work` block', self.spawn('next', '--successor', '--state', bare)['reason'])
+        no_skills = self.state('# State\nWhere.\n\n## How we work\n- Plain.\n', name='noskills.md')
+        self.assertIn('has no `skills in use: …` line', self.spawn('next', '--successor', '--state', no_skills)['reason'])
+        empty = self.state('# State\n\n## How we work\n- Plain.\nskills in use:\n', name='emptyskills.md')
+        self.assertIn('has no `skills in use: …` line', self.spawn('next', '--successor', '--state', empty)['reason'])
         old = self.state(name='old.md')
         os.utime(old, (time.time() - 7200, time.time() - 7200))
         self.assertIn('last written 120 minutes ago', self.spawn('next', '--successor', '--state', old)['reason'])
@@ -1609,17 +1619,79 @@ class Hive(unittest.TestCase):
         self.assertIn('successor of kid-cc: errand: Finish the notices.', self.run_hive('log'))
         self.assertEqual(self.spawn('side', who='kid-0004')['action'], 'refused', 'still one level deep')
 
-    def test_past_the_handoff_mark_each_prompt_says_to_hand_off_until_a_successor_is_started(self):
-        def at(tokens):
-            self.transcript('me-0001', '/work/repo', [{'type': 'assistant', 'message': {'usage': {
-                'input_tokens': 10, 'cache_read_input_tokens': tokens}}}])
-            return self.run_hive('since')
-        self.assertNotIn('handoff mark', at(200_000))
-        said = at(260_000)
-        self.assertIn("This session is at 260k of context, past the hive's 250k handoff mark", said)
+    def at_tokens(self, tokens, *flags):
+        self.transcript('me-0001', '/work/repo', [{'type': 'assistant', 'message': {'usage': {
+            'input_tokens': 10, 'cache_read_input_tokens': tokens}}}])
+        return self.run_hive('since', *flags)
+
+    def test_a_session_at_260k_finishes_the_thread_and_at_351k_hands_off_now(self):
+        self.assertNotIn('[session hive] This session is at', self.at_tokens(100_000))
+        said = self.at_tokens(260_000)
+        self.assertIn('This session is at 260k of context, past the 250k mark: finish the thread in hand and start '
+                      'nothing new', said)
+        self.assertIn('it hands off whatever is left', said)
+        self.assertNotIn('hand off now', said)
+        said = self.at_tokens(351_000)
+        self.assertIn('at 351k of context, past the 350k ceiling: hand off now, whatever is left', said)
         self.assertIn('`spawn --successor --state <file> --name <name>`', said)
+        self.assertIn('a `skills in use: …` line', said)
         self.spawn('aa-next', '--successor')
-        self.assertNotIn('handoff mark', self.run_hive('since'))
+        self.assertNotIn('[session hive] This session is at', self.run_hive('since'))
+
+    def test_the_fit_question_comes_at_a_boundary_from_150k_once_per_50k_with_the_three_exits_in_order(self):
+        said = self.at_tokens(160_000, '--take')
+        self.assertIn('This session is at 160k of context. If a thread just finished and the next one has not started, '
+                      'ask whether the next piece of work will fit before the 350k ceiling', said)
+        close, errand, successor = (said.index(x) for x in ('(1) close:', '(2) an errand', '(3) otherwise a successor'))
+        self.assertLess(close, errand)
+        self.assertLess(errand, successor)
+        self.assertIn('no state file', said[close:errand])
+        self.assertIn('tightly scoped remainder that needs no steering', said[errand:successor])
+        self.assertNotIn('This session is at', self.at_tokens(170_000, '--take'), 'asked once for this band')
+        self.assertIn('This session is at 205k', self.at_tokens(205_000, '--take'), 'and again from 200k')
+        self.assertIn('past the 250k mark', self.at_tokens(255_000, '--take'))
+        self.assertIn('past the 250k mark', self.at_tokens(256_000, '--take'), 'each prompt past 250k')
+
+    def test_a_successor_must_name_its_skills_in_use_or_none_and_its_header_says_to_reload_them(self):
+        self.assertIn('has no `skills in use: …` line',
+                      self.spawn('next', '--successor', '--state', self.state('# S\n## How we work\n- x\n', name='a.md'))['reason'])
+        self.assertEqual(self.spawn('next', '--successor', '--state', self.state(name='none.md'))['action'], 'started')
+        self.assertIn('was in the middle of no skill', self.spawns()[0]['argv'][4])
+        st = self.state('# S\n## How we work\n- x\n- **Skills in use:** going-to-bed (step 3 of 5), sweep\n', name='some.md')
+        self.assertEqual(self.spawn('next2', '--successor', '--state', st)['action'], 'started')
+        header = self.spawns()[1]['argv'][4].split('## Brief')[0]
+        self.assertIn('was partway through these skills: going-to-bed (step 3 of 5), sweep. Load each (Skill tool)', header)
+
+    def test_log_id_prints_one_decision_whole_and_decided_lists_them_all(self):
+        words = 'digestion 7 yes: ' + 'a long sentence, ' * 40
+        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'digestion', '--words', words, 'digestion 7 one line ' + 'x' * 400)
+        self.run_hive('decide', '--workspace', '/work/repo', '--area', 'digestion', '--words', 'digestion 8 yes', 'second')
+        out = self.run_hive('log', '--id', 'e' + time.strftime('%m%d') + '-01', '--hours', '0.001')
+        self.assertIn('x' * 400, out)
+        self.assertIn(words.strip(), out)
+        self.assertNotIn('second', out)
+        self.assertIn('second', self.run_hive('log', '--decided'))
+        p = self.run_hive('log', '--id', 'e0101-99', ok=False, full=True)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn('no decision e0101-99', p.stderr)
+
+    def test_a_background_sub_session_is_told_its_real_job_folder(self):
+        r = self.spawn('jobs')
+        self.assertEqual(r['jobDir'], os.path.join(self.home, '.claude', 'jobs', 'abcd1234'))
+        p = subprocess.Popen(['sleep', '60'])
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        self.register(p.pid, 'job-0005', 'jobs', '/work/repo')
+        told = self.run_hive('peers', self_id='job-0005')
+        folder = os.path.join(self.home, '.claude', 'jobs', 'abcd1234')
+        self.assertIn(f'Your job folder is `{folder}`: scratch files go in `{folder}/tmp`', told)
+
+    def test_the_hive_wrapper_runs_from_any_directory(self):
+        wrapper = os.path.join(os.path.dirname(HIVE), 'hive')
+        self.assertTrue(os.access(wrapper, os.X_OK))
+        p = subprocess.run([wrapper, 'log', '--decided'], cwd='/', capture_output=True, text=True,
+                           env=dict(os.environ, HOME=self.home))
+        self.assertEqual(p.stdout, '')
+        self.assertIn('no decisions in the log', p.stderr)
 
     def ready_kid(self, status='idle', kind='interactive'):
         """kid-cc, a sub-session of work-aa that sent its final debrief."""

@@ -1,0 +1,3 @@
+#!/bin/sh
+# `hive`: runs hive.py from any directory (link this file from a folder on PATH: ln -s <this file> ~/.local/bin/hive)
+exec python3 -I "$(dirname "$(readlink -f "$0")")/hive.py" "$@"

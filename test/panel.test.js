@@ -587,6 +587,17 @@ withHarness('auto-close never stops a session working, needing you, kept running
   eq(h.row('k').status, 'asleep');
 });
 
+withHarness("auto-close keeps a sit-down's row until its final debrief", async h => {
+  const sd = h.session('sd'); const er = h.session('er');
+  h.hiveChild('sd', 'boss', { kind: 'sit-down', sessionId: h.id('sd') });
+  h.hiveChild('er', 'boss', { kind: 'errand', sessionId: h.id('er') });
+  h.start(); h.step(5 * H); await er.gone(); h.step();
+  assert.ok(sd.alive(), 'a sit-down waiting for the user is not stopped'); eq(h.row('er').status, 'asleep');
+  h.hiveMark('sd', 'done', { how: 'final debrief' });
+  h.step(1.1 * H); await sd.gone(); h.step();
+  eq(h.row('sd').status, 'asleep');
+});
+
 withHarness('auto-close: 0 hours turns it off', async h => {
   h.config.autoCloseHours = 0;
   const a = h.session('a');

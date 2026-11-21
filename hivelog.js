@@ -10,6 +10,7 @@
 //
 //   const hive = new HiveLog(hiveDir)
 //   hive.reportedTo(sessionId, sinceMs) -> the Desk or parent it reported to at or after sinceMs, or null
+//   hive.keepsRow(sessionId) -> true for a sit-down sub-session that has not sent its final debrief
 //   hive.roleOf(sessionId) -> { area, role } it last took, or null
 //   hive.markOf(sessionId) -> { kind: 'done' | 'paused', what, at } while one holds, or null
 'use strict';
@@ -25,6 +26,7 @@ class HiveLog {
     this.dir = dir;
     this.reset();
     this.parents = new Map(); // sub-session name -> the session that started it
+    this.sitDowns = [];       // sit-down sub-sessions: { sessionId, bgId }
     this.kidsStamp = null;
   }
   reset() {
@@ -60,7 +62,14 @@ class HiveLog {
     if (stamp !== this.kidsStamp) {
       this.kidsStamp = stamp;
       this.parents = new Map();
-      try { for (const k of JSON.parse(fs.readFileSync(kids, 'utf8'))) if (k && k.name && k.parent) this.parents.set(k.name, k.parent); } catch { /* none */ }
+      this.sitDowns = [];
+      try {
+        for (const k of JSON.parse(fs.readFileSync(kids, 'utf8'))) {
+          if (!k || !k.name || !k.parent) continue;
+          this.parents.set(k.name, k.parent);
+          if (k.kind === 'sit-down') this.sitDowns.push({ sessionId: k.sessionId || '', bgId: k.bgId || '' });
+        }
+      } catch { /* none */ }
     }
   }
 
@@ -102,6 +111,14 @@ class HiveLog {
     this.refresh();
     const m = this.marks.get(sessionId);
     return m && m.kind !== 'cleared' ? m : null;
+  }
+
+  // A sit-down sub-session waits for the user, so quiet is not finished: its row stays until its final debrief.
+  keepsRow(sessionId) {
+    this.refresh();
+    const m = this.marks.get(sessionId);
+    if (m && m.kind === 'done') return false;
+    return this.sitDowns.some(k => (k.sessionId && k.sessionId === sessionId) || (k.bgId && sessionId.startsWith(k.bgId)));
   }
 
   roleOf(sessionId) {
