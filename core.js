@@ -353,7 +353,10 @@ class Provider {
   // `claude stop` (the conversation is kept; a plain kill gets it restarted) and opens here. Watching
   // a background command (Claude Code's "shell"), it is handed over too: the stop ends the command, so
   // a note left for the session (spawns.js leaveResumeNote) tells it, as it opens here, what was cut
-  // off. Still working or waiting on an answer, it is left alone. Returns whether to go on and open it.
+  // off. Waiting on you (a permission prompt or a question) with nothing else in flight, it is handed
+  // over too: the stop comes before anything you were asked about ran, and the note tells it to ask
+  // again, so the prompt shows up here. Still working, or waiting inside a helper agent it started, it
+  // is left alone, with a terminal offer. Returns whether to go on and open it.
   async handOver(id) {
     const reg = this.list.reg(id);
     if (!reg || reg.kind !== 'bg') return true;
@@ -361,9 +364,15 @@ class Provider {
     const name = displayName(reg);
     const status = reg.status || 'idle';
     const watching = status === 'shell' || status === 'watching'; // the list calls Claude Code's "shell" watching
-    if (status !== 'idle' && !watching) {
+    const waiting = status === 'waiting' ? jobs.waitingOn(reg.sessionId) : null;
+    const askAgain = !!(waiting && waiting.alone);
+    if (status !== 'idle' && !watching && !askAgain) {
+      const doing = status === 'busy' ? 'still working'
+        : status === 'watching' ? 'watching a background command'
+          : waiting ? 'waiting for an answer inside a helper agent it started (opening it here would cut that off)'
+            : 'waiting for an answer';
       const pick = await vscode.window.showInformationMessage(
-        `"${name}" is ${status === 'busy' ? 'still working' : status === 'watching' ? 'watching a background command' : 'waiting for an answer'} in the background. Watch it in a terminal, or click it again once it's done.`,
+        `"${name}" is ${doing} in the background. Watch it in a terminal, or click it again once it's done.`,
         'Watch in terminal');
       if (pick === 'Watch in terminal') {
         const t = vscode.window.createTerminal({ name, cwd: reg.cwd || undefined });
@@ -377,6 +386,10 @@ class Provider {
       const what = transcripts.watchingFor(reg);
       dropNote = spawns.leaveResumeNote(os.homedir(), reg.sessionId, what);
       vscode.window.setStatusBarMessage(`Claude Sessions: bringing "${name}" in; its watch${what ? ` (${what})` : ''} stops, and it will be told so it can start it again…`, 6000);
+    } else if (askAgain) {
+      const needs = waiting.needs || reg.waitingFor || 'your answer';
+      dropNote = spawns.leaveResumeNote(os.homedir(), reg.sessionId, '', needs);
+      vscode.window.setStatusBarMessage(`Claude Sessions: bringing "${name}" in; it will ask again here (${needs})…`, 6000);
     } else {
       vscode.window.setStatusBarMessage(`Claude Sessions: bringing "${name}" in from the background…`, 4000);
     }

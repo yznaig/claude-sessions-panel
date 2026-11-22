@@ -81,4 +81,22 @@ function parkedJob(sessionId) {
   return null;
 }
 
-module.exports = { parkedJob };
+// A running background session stopped mid-turn on a permission prompt or a question: what the daemon
+// says it needs, and whether it is waiting alone. `alone` is false when anything else is in flight (a
+// helper agent it started, a background command), since stopping it would cut that off; also false when
+// the record says nothing about what is in flight. Read fresh: it is asked once, on a click.
+//   waitingOn(sessionId) -> { needs, alone } or null
+function waitingOn(sessionId) {
+  if (typeof sessionId !== 'string' || sessionId.length < 8) return null;
+  for (const d of configDirs()) {
+    let s;
+    try { s = JSON.parse(fs.readFileSync(path.join(d, sessionId.slice(0, 8), 'state.json'), 'utf8')); } catch { continue; }
+    if (!s || typeof s !== 'object' || s.sessionId !== sessionId) continue;
+    const f = s.inFlight;
+    const alone = !!f && typeof f === 'object' && !(f.tasks > 0) && !(f.queued > 0);
+    return { needs: typeof s.needs === 'string' ? s.needs : '', alone };
+  }
+  return null;
+}
+
+module.exports = { parkedJob, waitingOn };

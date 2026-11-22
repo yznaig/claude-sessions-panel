@@ -55,13 +55,16 @@ function tagText(req) { return `Starting sub-session ${req.name}… [hive:${req.
 
 // A background session opened here while watching a command: stopping it ended the command. The note
 // waits in ~/.claude/session-hive/resume/<session id>.json until the session starts here, when the
-// companion mod hands it to the session (`hive.py resumed`). Returns a function that takes it back.
-function leaveResumeNote(home, sessionId, watching) {
+// companion mod hands it to the session (`hive.py resumed`). Opened while waiting on you instead,
+// `waiting` names what it asked (a permission prompt or a question), and the note tells it to ask again.
+// Returns a function that takes it back.
+function leaveResumeNote(home, sessionId, watching, waiting) {
   const dir = path.join(hiveDir(home), 'resume');
   const file = path.join(dir, `${sessionId}.json`);
   try {
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(file + '.tmp', JSON.stringify({ at: Date.now() / 1000, watching: watching || '' }) + '\n');
+    const note = { at: Date.now() / 1000, watching: watching || '', ...(waiting ? { waiting } : {}) };
+    fs.writeFileSync(file + '.tmp', JSON.stringify(note) + '\n');
     fs.renameSync(file + '.tmp', file);
   } catch { /* no note: the session still opens */ }
   return () => { try { fs.unlinkSync(file); } catch { /* gone already */ } };

@@ -595,6 +595,20 @@ class Hive(unittest.TestCase):
         self.assertIn('start it again', said)
         self.assertEqual(self.run_hive('resumed'), '', 'once')
 
+    def test_a_session_opened_while_waiting_is_told_once_to_ask_again(self):
+        self.resume_note('me-0001', watching='')
+        d = os.path.join(self.home, '.claude', 'session-hive', 'resume', 'me-0001.json')
+        with open(d) as f:
+            note = json.load(f)
+        note['waiting'] = 'approve Bash: curl -sI https://example.org'
+        with open(d, 'w') as f:
+            json.dump(note, f)
+        said = self.run_hive('resumed')
+        self.assertIn('approve Bash: curl -sI https://example.org', said)
+        self.assertIn('Ask again now', said)
+        self.assertNotIn('background command', said)
+        self.assertEqual(self.run_hive('resumed'), '', 'once')
+
     def test_no_note_and_a_stale_note_say_nothing(self):
         self.assertEqual(self.run_hive('resumed'), '')
         self.resume_note('me-0001', age=7200)

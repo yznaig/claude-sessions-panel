@@ -1114,6 +1114,14 @@ def cmd_resumed(a):
         return 0
     if time.time() - (note.get('at') or 0) > RESUME_FRESH_SECONDS:
         return 0
+    waiting = note.get('waiting')
+    if isinstance(waiting, str) and waiting.strip():
+        print(f"[session hive] The user opened this session in VS Code while it was waiting on them "
+              f"({waiting.strip()[:300]}). Bringing it in from the background stopped it before that was "
+              "answered: nothing you asked permission for ran, and no answer came. Ask again now, the same "
+              "way: repeat the same tool call so its permission prompt shows here, or ask the same question "
+              "again. This note is from the Claude Sessions panel, not the user.")
+        return 0
     what = note.get('watching') or 'a background command'
     print(f"[session hive] The user opened this session in VS Code while it was watching a background command "
           f"({what}). Bringing it in from the background stopped that command, so its result will not arrive. "

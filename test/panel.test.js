@@ -1617,6 +1617,46 @@ withHarness('a background session that is done opens with no note', async h => {
   assert.ok(!fs.existsSync(path.join(h.home, '.claude', 'session-hive', 'resume', a.id + '.json')));
 });
 
+// ---- a background session waiting on you: handed over, and told to ask again ----
+
+// The daemon's record for a running job mid-turn (~/.claude/jobs/<first 8>/state.json).
+function liveJob(h, name, { needs, inFlight }) {
+  const id = h.id(name);
+  const dir = path.join(h.home, '.claude/jobs', id.slice(0, 8));
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ state: 'working', tempo: 'blocked', needs, sessionId: id, ...(inFlight ? { inFlight } : {}) }));
+}
+
+withHarness('a background session waiting on a permission prompt: a click stops it, opens it here, and tells it to ask again', async h => {
+  const a = h.session('waitperm', { bg: true, status: 'waiting' });
+  a.set('waiting', { waitingFor: 'permission prompt' });
+  liveJob(h, 'waitperm', { needs: 'approve Bash: curl -sI https://example.org', inFlight: { tasks: 0, queued: 0, kinds: [] } });
+  h.start();
+  await h.send({ type: 'focus', id: a.id });
+  assert.ok(!a.alive(), 'stopped in the background');
+  eq(h.executed.at(-1)[0], 'claude-vscode.editor.open'); eq(h.executed.at(-1)[1], a.id);
+  const note = JSON.parse(fs.readFileSync(path.join(h.home, '.claude', 'session-hive', 'resume', a.id + '.json'), 'utf8'));
+  eq(note.waiting, 'approve Bash: curl -sI https://example.org'); eq(note.watching, '');
+  eq(h.terminals.length, 0);
+});
+
+withHarness('a background session waiting on you inside a helper agent is left alone, with the terminal offer', async h => {
+  const a = h.session('agentwait', { bg: true, status: 'waiting' });
+  liveJob(h, 'agentwait', { needs: 'approve Bash: curl -sI https://example.net', inFlight: { tasks: 1, queued: 0, kinds: ['local_agent'] } });
+  const b = h.session('unknownwait', { bg: true, status: 'waiting' });
+  liveJob(h, 'unknownwait', { needs: 'answer: Pick a color (Red · Blue)' }); // nothing said about what is in flight
+  h.start();
+  const before = h.executed.length;
+  h.pick = 'Watch in terminal'; await h.send({ type: 'focus', id: a.id });
+  h.pick = undefined; await h.send({ type: 'focus', id: b.id });
+  await h.pause();
+  assert.ok(a.alive()); assert.ok(b.alive());
+  eq(h.executed.length, before, 'not opened');
+  same(h.terminals[0].sent, ['claude attach job-agentwait']);
+  assert.match(h.told[0], /inside a helper agent/);
+  assert.ok(!fs.existsSync(path.join(h.home, '.claude', 'session-hive', 'resume', a.id + '.json')));
+});
+
 // ---- transcripts that are missing --------------------------------------------
 
 // A saved list can hold thousands of sessions whose transcript is gone (scripted `claude -p`
