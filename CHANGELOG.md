@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.30.4 — 2026-11-21
+**Sessions that can't be reopened leave the saved list.** A stopped session with no transcript (a scripted `claude -p` run, a filter agent) can't be opened again, but it stayed on the saved list for good, and the list grew with every scripted run (3,345 entries, 3,303 of them with no transcript). Now such a session leaves the list once it is a day old (e1121-59). Sessions with a transcript are kept as before. On this machine the list drops to 425 and a refresh takes ~13 ms. 136 tests.
+
 ## 0.30.3 — 2026-11-21
 **The panel no longer pins VS Code's extension host.** Sessions on the saved list whose transcript no longer exists (scripted `claude -p` runs, filter agents in `/tmp`: 3,303 of 3,345 on this machine) were searched for again on every refresh, one existence check in each of the 226 `~/.claude/projects` folders apiece, so each refresh blocked the extension host for about 2.5 s and every window's host sat at 100% CPU. Claude Code panels opened slowly and replies arrived in bursts. The list grew with every runner session, so it got worse over the day, and restarting the host did not help (the list is saved). Now one pass over the projects folders indexes every transcript at most once per 30 s, and only when a lookup misses, and a missing transcript is looked up again at most every 5 s. A refresh with that list drops from ~2.4 s to ~35 ms. A transcript that shows up later, in any folder, is still found. 135 tests.
 

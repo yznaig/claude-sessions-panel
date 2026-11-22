@@ -1645,3 +1645,17 @@ withHarness('a transcript that turns up later, in another folder, is still found
   h.step(31e3);
   eq(h.row('moved').name, 'Found it');
 });
+
+withHarness('a stopped session with no transcript leaves the saved list once it is a day old (e1121-59)', h => {
+  const entry = (name, cwd, age) => ({ id: h.id(name), cwd, name, since: h.now - age, startedAt: h.now - age });
+  h.transcript('kept', [L.customTitle('Kept')], h.other);
+  h.globalState.update(OPEN_KEY, [
+    entry('ghost', '/tmp/run-1', 25 * H), entry('young', '/tmp/run-2', 2 * H), entry('kept', h.other, 25 * H),
+    entry('ghost-here', h.proj, 25 * H),
+  ]);
+  h.start(); h.step();
+  const ids = (h.globalState.get(OPEN_KEY) || []).map(e => e.id).sort();
+  same(ids, [h.id('kept'), h.id('young')].sort());
+  h.step(23 * H);
+  same((h.globalState.get(OPEN_KEY) || []).map(e => e.id), [h.id('kept')]);
+});

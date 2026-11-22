@@ -39,6 +39,9 @@ const KEYS = {
 const ENDED_GRACE_MS = 30e3;
 // Without the session-trail mod nothing says when you left a closed session: move it after this.
 const NO_TRAIL_CLOSE_MS = 2 * 60e3;
+// A stopped session with no transcript (a scripted run, a filter agent) can't be opened again: it
+// leaves the saved list once it is this old, so the list doesn't grow with every scripted run (e1121-59).
+const GHOST_MS = 24 * 3600e3;
 // The one-time rebuild after upgrading to 0.6.0 takes stopped sessions active within this window.
 const UPGRADE_WINDOW_MS = 12 * 3600e3;
 // A filed session's saved copy is rewritten when its title or folder changes, or it is this stale.
@@ -101,7 +104,7 @@ class Saved {
   endedHere(id, cwd, liveIds) { return this.ranHere.has(id) && !liveIds.has(id) && this.scope.owns(cwd) && !this.isAsleep(id); }
 
   // Rebuild after a look at the registry. `live`: [{ entry, keep }] for each running session.
-  rebuild({ live, liveIds, isRemoved, isClosed, now }) {
+  rebuild({ live, liveIds, isRemoved, isClosed, isGhost = () => false, now }) {
     const stored = new Map((this.store.get(KEYS.saved) || []).filter(e => e && e.id).map(e => [e.id, e]));
     const next = new Map();
     for (const { entry, keep } of live) {
@@ -116,7 +119,7 @@ class Saved {
         if (!this.goneAt.has(id)) this.goneAt.set(id, now);
         if (now - this.goneAt.get(id) > ENDED_GRACE_MS) return;
       }
-      if (isClosed(id, e.cwd)) return;
+      if (isClosed(id, e.cwd) || isGhost(id, e)) return;
       if (!this.ranHere.has(id)) this.known.set(id, e);
       next.set(id, e);
     };
@@ -452,7 +455,8 @@ class SessionList {
       entry: this.entryOf(r, now),
       keep: !this.removed.has(r.sessionId) && !((r.status || 'idle') === 'idle' && this.transcripts.readTranscript(r).closed),
     }));
-    this.saved.rebuild({ live, liveIds: this.liveIds, isRemoved: id => this.removed.has(id), isClosed, now });
+    const isGhost = (id, e) => now - (e.since || e.startedAt || 0) > GHOST_MS && !this.transcripts.readTranscript({ sessionId: id, cwd: e.cwd }).file;
+    this.saved.rebuild({ live, liveIds: this.liveIds, isRemoved: id => this.removed.has(id), isClosed, isGhost, now });
     this.folders.track(live.map(x => x.entry), this.liveIds, isClosed);
     for (const pid of this.asleep.tidy(regs, now, id => this.saved.listed.has(id) || !!this.folders.of(id) || this.removed.has(id))) this.stuck.set(pid, now);
     this.autoClose(trail, now);
