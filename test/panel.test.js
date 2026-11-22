@@ -162,6 +162,32 @@ withHarness('watching: Claude Code\'s own "shell" status counts, and a finished 
   eq(h.row('s').status, 'idle'); eq(h.row('s').attention, 'ready'); same(h.takeSounds(), ['ready']);
 });
 
+withHarness('watching: a reply to your prompt that starts a watch turns green; the turns it starts itself to check on it stay gray', async h => {
+  const a = h.session('a', { status: 'busy', background: true, transcript: [L.said('why did it build up?', { at: h.now }), L.background('t1', 'Watch the extension host'), L.started('t1'), L.text('It built up because… Restart the host when you can; I am watching for it.')] });
+  await h.pause(100); // the background shell has started
+  h.start();
+  a.set('idle'); h.step();
+  eq(h.row('a').status, 'watching'); eq(h.row('a').attention, 'ready', 'green: it answered you'); same(h.takeSounds(), ['ready']);
+  eq(h.row('a').watchingFor, 'Watch the extension host');
+  // You read it; then its command finishes and wakes it: a turn of its own, which starts another watch.
+  await h.send({ type: 'ack', id: a.id }); eq(h.row('a').attention, null);
+  a.set('busy'); h.step();
+  h.transcript('a', [L.notified('t1'), L.background('t2', 'Watch again'), L.started('t2'), L.text('Still not restarted; watching again.')]);
+  a.set('idle'); h.step();
+  eq(h.row('a').status, 'watching'); eq(h.row('a').attention, null, 'its own check-in: gray'); same(h.takeSounds(), []);
+});
+
+withHarness('watching: no green when the turn only launched the command, or another session started it', async h => {
+  const p = h.session('p', { status: 'busy', background: true, transcript: [L.peer('Re-queue the runner jobs', h.now), L.background('t1', 'Poll the queue'), L.started('t1'), L.text('Re-queued; polling.')] });
+  const q = h.session('q', { status: 'busy', background: true, transcript: [L.said('merge it', { at: h.now }), L.text('Merging.'), L.background('t1', 'Poll deploy'), L.started('t1')] });
+  await h.pause(100);
+  h.start();
+  p.set('idle'); q.set('idle'); h.step();
+  eq(h.row('p').status, 'watching'); eq(h.row('p').attention, null, 'a message from another session');
+  eq(h.row('q').status, 'watching'); eq(h.row('q').attention, null, 'its words came before the command, which it carries on with');
+  same(h.takeSounds(), []);
+});
+
 withHarness('watching: the label is the latest command still running; finished or refused ones drop out', h => {
   h.session('s', { status: 'shell', transcript: [
     L.background('t1', 'Wait for checks'), L.started('t1'),

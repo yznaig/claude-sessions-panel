@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.30.2 — 2026-11-21
+**A reply that starts a watch turns green.** A session that answered you and, in the same turn, started a background command (here, to watch for a restart you were to do) went from running straight to watching, so it stayed gray and was left unopened. Now, when the turn that ends in a watch began with your own prompt and ended in words for you, the row turns green with the ready sound and says **response ready · watching** (the dot is green; the watched command is still in the tooltip). Reading it clears the green as usual. The turns it then starts by itself to check on the command stay gray, as do turns another session's message started and turns whose last step was the command itself; when the watch ends and it replies, it turns green as before (no second sound if it is still green). 133 tests.
+
 ## 0.30.1 — 2026-11-21
 **Desks are yellow.** A new first rule in the automatic dot colors: a session whose name, title or hive role has the word *desk* gets the middle yellow (#e0cf7b), ahead of every topic, so a Desk on a ship day is still yellow. A keyword ending in `$` now matches only the whole word, and the rule is `desk$`, so *desktop* doesn't turn yellow. A color you pick still wins. 131 tests.
 

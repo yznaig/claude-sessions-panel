@@ -37,7 +37,7 @@
       : r.attention === 'closable' ? 'ready to close · asleep' : r.attention === 'paused' ? 'paused · asleep' : 'asleep';
     if (r.status === 'offline') return 'not running';
     if (r.attention === 'waiting') return r.waitingFor ? 'needs you: ' + r.waitingFor : 'needs you';
-    if (r.attention === 'ready') return 'response ready';
+    if (r.attention === 'ready') return r.status === 'watching' ? 'response ready · watching' : 'response ready';
     if (r.attention === 'relayed') return 'recap at ' + r.relayedTo + ' ↗';
     if (r.attention === 'closable') return 'ready to close';
     if (r.attention === 'paused') return r.pausedFor ? 'paused · ' + clip(r.pausedFor, WATCH_LABEL_MAX) : 'paused';

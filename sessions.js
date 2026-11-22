@@ -325,6 +325,9 @@ class SessionList {
     this.firstLoad = !carried;
     this.prevStatus = new Map(carried ? carried.prevStatus : []); // id -> last seen status
     this.attention = new Map(carried ? carried.attention : []);   // id -> 'ready' | 'waiting'
+    // id -> the prompt (its time) whose reply already turned a watching session green, so the turns
+    // it starts by itself to check on its command don't turn it green again.
+    this.greenTurn = new Map(carried ? carried.greenTurn || [] : []);
     this.autoClosed = new Set(store.get(KEYS.autoClosed, []));      // "<id>:<closedAt>" already moved once
     this.regs = [];
     this.liveIds = new Set(live.map(r => r.sessionId));
@@ -354,7 +357,7 @@ class SessionList {
   running() { return this.regs; }
 
   handOver() {
-    return { prevStatus: [...this.prevStatus], attention: [...this.attention], ...this.saved.handOver() };
+    return { prevStatus: [...this.prevStatus], attention: [...this.attention], greenTurn: [...this.greenTurn], ...this.saved.handOver() };
   }
 
   entryOf(r, now) {
@@ -421,19 +424,25 @@ class SessionList {
           this.restore(id);
           if (!this.firstLoad && this.scope.shows(r.cwd)) sounds.push('waiting');
         }
-      } else if (status === 'idle' && (prev === 'busy' || prev === 'watching')) {
+      } else if ((status === 'idle' && (prev === 'busy' || prev === 'watching')) || (status === 'watching' && prev === 'busy' && this.repliedToYou(id, t))) {
+        // Green: its turn ended. A watching one only when that turn answered your own prompt in
+        // words (it replied and started a watch, maybe on you); a turn it began itself to check on
+        // its command, or one that only launched the command, stays gray.
+        const was = this.attention.get(id);
         this.attention.set(id, 'ready');
+        if (status === 'watching') this.greenTurn.set(id, t.turnAt);
         this.restore(id);
         // A filed session's ready is a quiet dot on its tab; one that reported to the Desk, or is
-        // ready to close or paused, is quiet too, unless it is answering your own prompt.
+        // ready to close or paused, is quiet too, unless it is answering your own prompt. One already
+        // green from its watch doesn't sound again when the watch ends.
         const mark = this.markOf(r);
-        if (!this.folders.of(id) && this.scope.shows(r.cwd) && !this.relayOf(r) && (!mark || this.answersYou(r, mark))) sounds.push('ready');
+        if (was !== 'ready' && !this.folders.of(id) && this.scope.shows(r.cwd) && !this.relayOf(r) && (!mark || this.answersYou(r, mark))) sounds.push('ready');
       }
       this.prevStatus.set(id, status);
     }
     for (const r of regs) if (this.attention.get(r.sessionId) === 'ready') this.asleep.markReady(r.sessionId, r.pid);
     for (const id of [...this.prevStatus.keys()]) {
-      if (!seen.has(id)) { this.prevStatus.delete(id); this.attention.delete(id); }
+      if (!seen.has(id)) { this.prevStatus.delete(id); this.attention.delete(id); this.greenTurn.delete(id); }
     }
     this.firstLoad = false;
     this.regs = regs;
@@ -485,6 +494,12 @@ class SessionList {
   // A marked session whose latest turn was your prompt, given after the mark was set: its reply is for
   // you, so it sounds and counts on the badge like green, while the row stays red (or paused). The turn
   // that sent the debrief, and turns another session's message started, stay quiet.
+  // The turn that just ended began with your own prompt (not another session's message, not its
+  // command finishing), ended with words, and hasn't turned the row green before.
+  repliedToYou(id, t) {
+    return !!t.turnAt && !t.turnByPeer && !!String(t.reply || '').trim() && this.greenTurn.get(id) !== t.turnAt;
+  }
+
   answersYou(r, mark) {
     const t = this.transcripts.readTranscript(r);
     return !!mark && !!t.turnAt && !t.turnByPeer && t.turnAt > mark.at;
