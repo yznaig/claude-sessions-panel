@@ -47,17 +47,37 @@ function replyCost(text) {
 const CLOSE_SKILL = 'anything-left';
 const CLOSE_REPLY = /^[\s*_>#]*good to close\b/i;
 
+// Where a session's transcript is: its own folder's, else wherever the index of every projects
+// folder saw it. The index is rebuilt at most once per INDEX_MS, and only when a lookup misses;
+// a miss is not looked up again for MISS_RETRY_MS. A saved list can hold thousands of sessions
+// with no transcript (scripted runs), and searching every folder for each one on every refresh
+// pinned the extension host at 100% CPU.
+const INDEX_MS = 30e3;
+const MISS_RETRY_MS = 5e3;
+let transcriptIndex = null; // { at, home, byId: Map<sessionId, file> }
+
+function indexedTranscript(projects, id) {
+  const now = Date.now();
+  if (!transcriptIndex || transcriptIndex.home !== projects || now - transcriptIndex.at > INDEX_MS) {
+    const byId = new Map();
+    let dirs = [];
+    try { dirs = fs.readdirSync(projects); } catch { /* no projects dir */ }
+    for (const d of dirs) {
+      let files;
+      try { files = fs.readdirSync(path.join(projects, d)); } catch { continue; }
+      for (const f of files) if (f.endsWith('.jsonl')) byId.set(f.slice(0, -6), path.join(projects, d, f));
+    }
+    transcriptIndex = { at: now, home: projects, byId };
+  }
+  return transcriptIndex.byId.get(id) || null;
+}
+
 function transcriptFor(rec) {
   const projects = path.join(os.homedir(), '.claude', 'projects');
   const direct = path.join(projects, String(rec.cwd || '').replace(/[^a-zA-Z0-9]/g, '-'), rec.sessionId + '.jsonl');
   if (fs.existsSync(direct)) return direct;
-  try {
-    for (const d of fs.readdirSync(projects)) {
-      const p = path.join(projects, d, rec.sessionId + '.jsonl');
-      if (fs.existsSync(p)) return p;
-    }
-  } catch { /* no projects dir */ }
-  return null;
+  const found = indexedTranscript(projects, String(rec.sessionId));
+  return found && fs.existsSync(found) ? found : null;
 }
 
 function blocksOf(r) {
@@ -161,13 +181,14 @@ function scanLine(entry, line) {
 
 function readTranscript(rec) {
   let entry = transcriptCache.get(rec.sessionId);
-  if (!entry || !entry.file) {
-    entry = { file: transcriptFor(rec), ...FRESH };
+  if (!entry || (!entry.file && Date.now() - (entry.missedAt || 0) >= MISS_RETRY_MS)) {
+    const file = transcriptFor(rec);
+    entry = { file, ...FRESH, missedAt: file ? 0 : Date.now() };
     transcriptCache.set(rec.sessionId, entry);
   }
   if (!entry.file) return entry;
   let size;
-  try { size = fs.statSync(entry.file).size; } catch { entry.file = null; return entry; }
+  try { size = fs.statSync(entry.file).size; } catch { entry.file = null; entry.missedAt = Date.now(); return entry; }
   if (size < entry.offset) Object.assign(entry, FRESH); // rewritten
   if (size > entry.offset) {
     let fd;

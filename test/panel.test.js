@@ -1616,3 +1616,32 @@ withHarness('a background session that is done opens with no note', async h => {
   await h.send({ type: 'focus', id: a.id });
   assert.ok(!fs.existsSync(path.join(h.home, '.claude', 'session-hive', 'resume', a.id + '.json')));
 });
+
+// ---- transcripts that are missing --------------------------------------------
+
+// A saved list can hold thousands of sessions whose transcript is gone (scripted `claude -p`
+// runs, filter agents in /tmp). Looking each one up again across every projects folder on every
+// refresh pinned the extension host at 100% CPU (11-21).
+withHarness('a missing transcript is not searched for again across every projects folder on each refresh', h => {
+  for (let i = 0; i < 30; i++) fs.mkdirSync(path.join(h.home, '.claude/projects', 'folder-' + i), { recursive: true });
+  const gone = Array.from({ length: 50 }, (_, i) => ({ id: h.id('gone-' + i), cwd: '/tmp/run-' + i, name: 'gone-' + i, since: h.now, startedAt: h.now }));
+  h.globalState.update(OPEN_KEY, gone);
+  h.start(); h.step();
+  const projects = path.join(h.home, '.claude/projects');
+  let scans = 0, probes = 0;
+  const { readdirSync, existsSync } = fs;
+  fs.readdirSync = function (p, ...a) { if (path.resolve(String(p)) === projects) scans++; return readdirSync.call(this, p, ...a); };
+  fs.existsSync = function (p) { if (String(p).startsWith(projects + path.sep)) probes++; return existsSync.call(this, p); };
+  try { for (let i = 0; i < 5; i++) h.step(); } finally { fs.readdirSync = readdirSync; fs.existsSync = existsSync; }
+  assert.ok(scans <= 1, `projects folder listed ${scans} times in 5 refreshes`);
+  assert.ok(probes <= 50 * 2, `${probes} transcript probes in 5 refreshes for 50 missing transcripts`);
+});
+
+withHarness('a transcript that turns up later, in another folder, is still found', h => {
+  h.session('moved', { status: 'idle' });
+  h.start();
+  assert.notEqual(h.row('moved').name, 'Found it');
+  h.transcript('moved', [L.customTitle('Found it')], h.other);
+  h.step(31e3);
+  eq(h.row('moved').name, 'Found it');
+});
