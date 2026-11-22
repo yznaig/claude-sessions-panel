@@ -24,15 +24,20 @@ body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size
 .dot.waiting { opacity: 1; background: var(--vscode-charts-blue, #3794ff); box-shadow: 0 0 6px var(--vscode-charts-blue, #3794ff); animation: pulse 1.2s ease-in-out infinite; }
 /* a color you chose: it fills the dot, and the state keeps its shape (spinner, glow, ring) */
 .dotcell { align-self: stretch; display: flex; align-items: center; justify-content: center; cursor: pointer; }
-.dotcell .dot { flex: none; }
-/* on a session row the dot is half again as big as elsewhere (search results), and its own button */
-.row .dotcell .dot { width: 15px; height: 15px; }
-.row .dotcell .dot.busy { width: 12px; height: 12px; border-width: 3px; }
-.row .dotcell .dot.closed, .row .dotcell .dot.asleep, .row .dotcell .dot.offline, .row .dotcell .dot.paused { width: 12px; height: 12px; border-width: 2px; }
-.row .dotcell .dot.watching { width: 20px; height: 15px; }
-.row .dotcell .dot.watching i { width: 4px; height: 4px; }
-.dotcell:hover .dot { outline: 1px solid color-mix(in srgb, var(--vscode-foreground, #ccc) 30%, transparent); outline-offset: 2px; }
-.dotcell:hover .dot.watching { outline: none; }
+.dotcell .dot, .dotcell .dotwrap { flex: none; }
+/* an open row's dot is half again as big as a closed one's (and the search results'); the dot is
+   the row's opener */
+.row.open .dotcell .dot { width: 15px; height: 15px; }
+.row.open .dotcell .dot.busy { width: 12px; height: 12px; border-width: 3px; }
+.row.open .dotcell .dot.closed, .row.open .dotcell .dot.asleep, .row.open .dotcell .dot.offline, .row.open .dotcell .dot.paused { width: 12px; height: 12px; border-width: 2px; }
+.row.open .dotcell .dot.watching { width: 20px; height: 15px; }
+.row.open .dotcell .dot.watching i { width: 4px; height: 4px; }
+/* a closed row with a note: a tiny yellow dot on the top-right edge of its dot */
+.dotwrap { position: relative; display: inline-flex; align-items: center; justify-content: center; }
+.dotwrap .notemark { position: absolute; top: -3px; right: -4px; width: 5px; height: 5px; border-radius: 50%; background: var(--vscode-charts-yellow, #d7ba7d); box-shadow: 0 0 0 1px var(--vscode-panel-background, var(--vscode-editor-background, #1e1e1e)); pointer-events: none; }
+/* hover ring only on a dot that opens something */
+.dotcell.folds:hover .dot { outline: 1px solid color-mix(in srgb, var(--vscode-foreground, #ccc) 30%, transparent); outline-offset: 2px; }
+.dotcell.folds:hover .dot.watching { outline: none; }
 .hittop .dot { justify-self: center; }
 .dot.tinted { opacity: 1; background: var(--c); box-shadow: none; }
 .dot.tinted.ready, .dot.tinted.waiting { box-shadow: 0 0 6px var(--c); }

@@ -12,6 +12,15 @@
   // The note being typed under a row: { id, value }. While it is open the list isn't redrawn, so
   // the panel's own updates never take the box away mid-word.
   let noteEdit = null;
+  // Rows opened with a click on their dot: ASKED, NOW and the note show under the name. Closed by
+  // default; kept in the webview's saved state so a redraw or a panel reload leaves them as they were.
+  const saved = vscode.getState() || {};
+  const opened = new Set(Array.isArray(saved.opened) ? saved.opened : []);
+  function toggleOpen(id) {
+    if (opened.has(id)) opened.delete(id); else opened.add(id);
+    vscode.setState({ ...(vscode.getState() || {}), opened: [...opened] });
+    render();
+  }
 
   function age(ms) {
     const s = Math.max(0, Math.round(ms / 1000));
@@ -186,13 +195,22 @@
     d.title = known + r.cwd + '\n' + r.id + (offline ? '\nNot running: click to reopen' : '') +
       (asleep ? (r.retired ? '\nAsleep: Claude Code stopped it after an hour waiting on you. Click to open it; the conversation resumes.' : '\nAsleep: its process was stopped to free memory. Click to wake it; the conversation resumes.') : '') +
       (r.status === 'watching' ? '\nWatching' + (r.watchingFor ? ': ' + r.watchingFor : ' a background command') + '. It carries on by itself when that finishes.' : '');
-    const cell = el('span', 'dotcell');
-    cell.title = 'Click for a color' + (r.autoColor && !r.manualColor ? ' (this one is automatic, from its name or role)' : '');
-    cell.appendChild(dot(kind, r.color));
-    // A click or right-click on the dot picks its color; a click anywhere else on the row opens the session.
-    const pick = ev => { ev.preventDefault(); ev.stopPropagation(); colorMenu(r, ev.clientX, ev.clientY); };
-    cell.addEventListener('click', pick);
-    cell.addEventListener('contextmenu', pick);
+    // The dot opens and closes the row's lines (ASKED, NOW, your note); it is the big dot while open.
+    // Right-click it for its color. A click anywhere else on the row opens the session.
+    const isOpen = opened.has(r.id) || !!(noteEdit && noteEdit.id === r.id);
+    const hasLines = !!(r.recap || r.note);
+    if (isOpen) d.classList.add('open');
+    const cell = el('span', 'dotcell' + (hasLines ? ' folds' : ''));
+    cell.title = (hasLines ? (isOpen ? 'Click to hide what it was asked and where it stands' : 'Click to show what it was asked and where it stands') + (r.note ? ', and your note' : '') : 'No recap yet') +
+      '\nRight-click for a color' + (r.autoColor && !r.manualColor ? ' (this one is automatic, from its name or role)' : '');
+    // A closed row with a note: a tiny yellow dot on the edge of its dot (beside it, so it doesn't
+    // spin or pulse with it).
+    const wrap = el('span', 'dotwrap');
+    wrap.appendChild(dot(kind, r.color));
+    if (r.note && !isOpen) wrap.appendChild(el('b', 'notemark'));
+    cell.appendChild(wrap);
+    cell.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); closeMenu(); toggleOpen(r.id); });
+    cell.addEventListener('contextmenu', ev => { ev.preventDefault(); ev.stopPropagation(); colorMenu(r, ev.clientX, ev.clientY); });
     d.appendChild(cell);
     d.appendChild(el('span', 'name', r.name));
     const repo = el('span', 'repo', clip(r.repo, REPO_LABEL_MAX));
@@ -237,14 +255,20 @@
     d.appendChild(x);
     // Under the name: what it was asked and where it stands (written by a small model after each
     // turn), then your note. Each is a line as wide as the row; the row grows to hold them.
-    if (r.recap) d.appendChild(recapLine(r, kind));
-    if (noteEdit && noteEdit.id === r.id) d.appendChild(noteBox(r, d));
-    else if (r.note) {
-      const n = el('div', 'note', r.note);
-      n.title = r.note + '\n(right-click the session to edit or remove the note)';
-      d.appendChild(n);
+    // Shown only while the row is open; closed, they ride in the row's tooltip.
+    if (isOpen) {
+      if (r.recap) d.appendChild(recapLine(r, kind));
+      if (noteEdit && noteEdit.id === r.id) d.appendChild(noteBox(r, d));
+      else if (r.note) {
+        const n = el('div', 'note', r.note);
+        n.title = r.note + '\n(right-click the session to edit or remove the note)';
+        d.appendChild(n);
+      }
+      if (r.recap || r.note || (noteEdit && noteEdit.id === r.id)) d.classList.add('lined');
+    } else if (hasLines) {
+      d.title = (r.recap && r.recap.asked ? 'Asked: ' + r.recap.asked + '\n' : '') + (r.recap && r.recap.now ? 'Now: ' + r.recap.now + '\n' : '') +
+        (r.note ? 'Note: ' + r.note + '\n' : '') + '\n' + d.title;
     }
-    if (r.recap || r.note || (noteEdit && noteEdit.id === r.id)) d.classList.add('lined');
     d.addEventListener('click', () => post({ type: 'focus', id: r.id }));
     return d;
   }
@@ -259,7 +283,12 @@
   }
 
   // ---- your note: typed in place ----
-  function editNote(r) { noteEdit = { id: r.id, value: r.note || '' }; render(); }
+  // Typing a note opens the row, so the note is in sight when the box closes.
+  function editNote(r) {
+    noteEdit = { id: r.id, value: r.note || '' };
+    if (!opened.has(r.id)) { opened.add(r.id); vscode.setState({ ...(vscode.getState() || {}), opened: [...opened] }); }
+    render();
+  }
   function endNote(save) {
     if (!noteEdit) return;
     const { id, value } = noteEdit;
