@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.30.1 — 2026-11-21
+**Desks are yellow.** A new first rule in the automatic dot colors: a session whose name, title or hive role has the word *desk* gets the middle yellow (#e0cf7b), ahead of every topic, so a Desk on a ship day is still yellow. A keyword ending in `$` now matches only the whole word, and the rule is `desk$`, so *desktop* doesn't turn yellow. A color you pick still wins. 131 tests.
+
 ## 0.30.0 — 2026-11-21
 **Rows fold: the dot opens them.** With ASKED, NOW and a note on every row, the list ran three or four lines a session and read as a wall of green. Now each session is one line by default with the small dot. A left click on the dot opens that row (the dot grows to the big size; ASKED, NOW and the note show under the name) and closes it again; each row opens on its own and stays as left through redraws and panel reloads (kept in the webview's state, per window). The color picker moves to a right-click on the dot (**Dot color…** in the ⋯ menu still works). A closed row with a note shows a tiny amber dot on the edge of its dot, and its tooltip carries the recap and the note. **Add note** opens the row. Search results unchanged. 130 tests (the change is in the webview only).
 

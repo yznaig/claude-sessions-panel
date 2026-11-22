@@ -2,7 +2,7 @@
   "name": "claude-sessions-panel",
   "displayName": "Claude Sessions",
   "description": "A bottom-panel tab listing your live Claude Code sessions: running, response ready (green), needs an answer (blue). Click to focus the session. Plus a Usage view: the current usage windows of every Claude Code and Codex login on the machine.",
-  "version": "0.30.0",
+  "version": "0.30.1",
   "publisher": "yznaig",
   "license": "MIT",
   "author": "yznaig",
@@ -182,6 +182,7 @@
         "claudeSessions.autoColors": {
           "type": "array",
           "default": [
+            { "match": "desk$", "color": "#e0cf7b" },
             { "match": "database|schema|db|migration", "color": "#9546ce" },
             { "match": "ship|merge|deploy", "color": "#46ce51" },
             { "match": "triage", "color": "#ce8546" },
@@ -190,7 +191,7 @@
           "items": {
             "type": "object",
             "properties": {
-              "match": { "type": "string", "description": "Keywords separated by |. Each matches any word in the session's name, title or hive role that starts with it." },
+              "match": { "type": "string", "description": "Keywords separated by |. Each matches any word in the session's name, title or hive role that starts with it; one ending in $ matches only that whole word." },
               "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "description": "The dot color, as #rrggbb." }
             },
             "required": ["match", "color"]

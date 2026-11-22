@@ -1464,25 +1464,38 @@ withHarness('paused: the paused form shows its own label and color, not red, and
 
 // ---- automatic dot colors: by the job in a session's name, title or hive role ---------
 
-const RED = '#ce4646', GREEN = '#46ce51', PURPLE = '#9546ce', ORANGE = '#ce8546';
+const RED = '#ce4646', GREEN = '#46ce51', PURPLE = '#9546ce', ORANGE = '#ce8546', YELLOW = '#e0cf7b';
 
 withHarness('auto colors: builders red, ship and merge green, database purple, triage orange, from name, title or role', async h => {
   h.session('runner-builder-a3'); h.session('runner-triage-2'); h.session('ship-lane-2'); h.session('merge-pace');
-  h.session('schema-healing-3'); h.session('db-access'); const r = h.session('desk-helper'); h.session('plain'); h.session('shipping-notes');
+  h.session('schema-healing-3'); h.session('db-access'); const r = h.session('helper-7'); h.session('plain'); h.session('shipping-notes');
   h.session('t', { transcript: [L.aiTitle('Database cleanup for the intake form')] });
   h.start();
-  h.hive({ dir: 'role', from: 'desk-helper', fromId: r.id, workspace: h.proj, area: 'runner', role: 'triage' });
+  h.hive({ dir: 'role', from: 'helper-7', fromId: r.id, workspace: h.proj, area: 'runner', role: 'triage' });
   h.hive({ dir: 'role', from: 'db-access', fromId: h.id('db-access'), workspace: h.proj, area: 'db-access', role: 'builder' });
   h.step();
   eq(h.row('runner-builder-a3').color, RED); eq(h.row('runner-triage-2').color, ORANGE);
   eq(h.row('ship-lane-2').color, GREEN); eq(h.row('merge-pace').color, GREEN);
   eq(h.row('schema-healing-3').color, PURPLE, 'the topic beats builder');
   eq(h.row('db-access').color, PURPLE, 'a database builder by role is still purple');
-  eq(h.row('desk-helper').color, ORANGE, 'from its hive role alone');
+  eq(h.row('helper-7').color, ORANGE, 'from its hive role alone');
   eq(h.row('t').color, PURPLE, 'from its title');
   eq(h.row('plain').color, null);
   eq(h.row('shipping-notes').color, GREEN, 'a keyword matches the start of a word');
   eq(h.row('runner-builder-a3').autoColor, RED); eq(h.row('runner-builder-a3').manualColor, null);
+});
+
+withHarness('auto colors: a Desk is yellow, by name, title or hive role, over any topic; desktop is not a Desk', async h => {
+  h.session('desk-31'); h.session('desk-ship-day'); h.session('desktop-app'); const c = h.session('command-hq-12');
+  h.session('t', { transcript: [L.aiTitle('Desk 32 everything that is yours')] });
+  h.start();
+  h.hive({ dir: 'role', from: 'command-hq-12', fromId: c.id, workspace: h.proj, area: 'hire', role: 'desk' });
+  h.step();
+  eq(h.row('desk-31').color, YELLOW);
+  eq(h.row('desk-ship-day').color, YELLOW, 'a Desk on a ship day is still a Desk');
+  eq(h.row('command-hq-12').color, YELLOW, 'from its hive role alone');
+  eq(h.row('t').color, YELLOW, 'from its title');
+  eq(h.row('desktop-app').color, null, 'desk$ matches only the whole word');
 });
 
 withHarness('auto colors: your pick wins; Automatic hands it back; No color stays off; the rules come from settings', async h => {
@@ -1503,7 +1516,7 @@ test('auto colors: the settings default is the same as the built-in rules', () =
   const pkg = require('../package.json');
   const { DEFAULT_RULES } = require('../autocolor');
   same(pkg.contributes.configuration.properties['claudeSessions.autoColors'].default, DEFAULT_RULES);
-  same(DEFAULT_RULES.map(r => r.color), [PURPLE, GREEN, ORANGE, RED]);
+  same(DEFAULT_RULES.map(r => r.color), [YELLOW, PURPLE, GREEN, ORANGE, RED]);
 });
 
 // ---- hive sub-sessions open as Claude Code tabs ------------------------------------
