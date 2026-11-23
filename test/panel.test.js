@@ -209,6 +209,23 @@ withHarness('an idle green reply stays green through a turn the session starts i
   eq(h.row('a').attention, 'ready'); same(h.takeSounds(), [], 'no second sound');
 });
 
+withHarness("a session working in a git worktree of this window's repo is listed here", h => {
+  // spec-face-1122, 11-22: its folder was a ticket worktree under ~/.claude/jobs, outside ~/hire,
+  // so the HIRE window left it out. A worktree's .git file names the repo it belongs to.
+  const wt = path.join(h.home, 'jobs/95f182d5/tmp/po');
+  fs.mkdirSync(wt, { recursive: true });
+  fs.writeFileSync(path.join(wt, '.git'), 'gitdir: ' + path.join(h.proj, 'docs/pass-off/.git/worktrees/po37') + '\n');
+  const sub = path.join(wt, 'tickets'); fs.mkdirSync(sub);
+  const far = path.join(h.home, 'jobs/other/tmp/po');
+  fs.mkdirSync(far, { recursive: true });
+  fs.writeFileSync(path.join(far, '.git'), 'gitdir: ' + path.join(h.other, '.git/worktrees/x') + '\n');
+  h.session('wt', { cwd: wt }); h.session('deep', { cwd: sub }); h.session('far', { cwd: far });
+  h.start();
+  assert.ok(h.row('wt'), 'the worktree session is listed');
+  assert.ok(h.row('deep'), 'a folder inside the worktree too');
+  eq(h.row('far'), undefined, "another repo's worktree is not");
+});
+
 withHarness('watching: no green when the turn only launched the command, or another session started it', async h => {
   const p = h.session('p', { status: 'busy', background: true, transcript: [L.peer('Re-queue the runner jobs', h.now), L.background('t1', 'Poll the queue'), L.started('t1'), L.text('Re-queued; polling.')] });
   const q = h.session('q', { status: 'busy', background: true, transcript: [L.said('merge it', { at: h.now }), L.text('Merging.'), L.background('t1', 'Poll deploy'), L.started('t1')] });

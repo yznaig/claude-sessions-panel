@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.32.2 — 2026-11-22
+**A session working in a git worktree shows in its repo's window.** A window lists the sessions whose folder is inside its own. A sit-down that moved into a ticket worktree kept under `~/.claude/jobs/<id>/tmp/` (outside the repo) was left out of every window, though it was running and waiting on the user (spec-face-1122, 11-22). Now a session whose folder is in a git worktree (a `.git` file reading `gitdir: <repo>/.git/worktrees/<name>`, at or above its folder) counts as inside `<repo>`, so it shows, sounds and is kept like any other session of that window. A found repo is remembered; a miss is looked up again after a minute. 146 tests.
+
 ## 0.32.1 — 2026-11-22
 **A green reply you haven't opened stays green while the session works on its own** (decision e1122-36, "1. Yes."). A session answered your prompt and kept a command running, so its row went green (0.30.2). Two and a half minutes later the command ended and woke the session; any turn back to running cleared the green, and the 0.30.2 guard against watchers flashing green kept that same prompt from turning it green again, so it sat gray on watching with a reply unread (rocks-push-1122, 11-22). Now a row that is green and unopened stays green through turns the session starts itself (a background command finishing, another session's message), and doesn't sound again. Opening it clears it as before, and so does a new prompt of yours. 145 tests.
 
