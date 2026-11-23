@@ -2025,6 +2025,17 @@ class Asleep(unittest.TestCase):
         self.assertNotIn('stopped-one', out, 'claude stop ended it on purpose')
         self.assertNotIn('esc-one', out, 'the user interrupted it')
 
+    def test_peers_leaves_out_a_retired_sub_session_that_sent_its_final_debrief(self):
+        sid = self.job('kid-done', 'cafe0002')
+        self.job('kid-busy', 'cafe0003')
+        with open(self._mk_children(), 'w') as f:
+            json.dump([{'name': n, 'parent': 'work-aa', 'bgId': b, 'at': time.time(), 'cwd': '/work/repo'}
+                       for n, b in (('kid-done', 'cafe0002'), ('kid-busy', 'cafe0003'))], f)
+        self.add_log({'at': time.time() - 4100, 'dir': 'done', 'from': 'kid-done', 'fromId': sid})
+        out = self.run_hive('peers')
+        self.assertIn('**kid-busy**', out)
+        self.assertNotIn('kid-done', out, 'finished: it waits to be closed, not for messages')
+
     def test_peers_leaves_out_a_retired_session_resumed_as_a_new_job(self):
         old = self.job('desk-34', 'd8dd355a')
         self.job('desk-34', '599c535b', state='working', created=time.time(),

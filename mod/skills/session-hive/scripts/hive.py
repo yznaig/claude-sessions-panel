@@ -554,25 +554,26 @@ def job_files():
     return out
 
 
-def carried_on(sid, since, jobs=None):
-    """Whether a background job started since `since` (seconds) forked this session: it carries on there."""
-    for f, st in jobs if jobs is not None else job_files():
+def carried_on_ids(jobs, since):
+    """Session ids that a background job started since `since` (seconds) forked: they carry on there."""
+    out = set()
+    for f, st in jobs:
         try:
             if os.path.getmtime(f) < since - 60:
                 continue
         except OSError:
             continue
         t = st.get('linkScanPath')
-        if st.get('sessionId') != sid and isinstance(t, str) and sid in forked_from(t):
-            return True
-    return False
+        if isinstance(t, str):
+            out.update(x for x in forked_from(t) if x != st.get('sessionId'))
+    return out
 
 
-def retired(st, live, jobs=None):
+def retired(st, live, jobs=None, carried=None):
     """Whether a background job's session sits retired: Claude Code's daemon ended its process after an hour at
     its prompt (`bg retire …`), whether it asked the user something (blocked) or was idle (done), and nothing has
     carried the conversation on since (opened in VS Code, resumed as another job). Not after `claude stop`
-    (stopped), nor when the user interrupted its last turn (Esc)."""
+    (stopped), nor when the user interrupted its last turn (Esc). `carried`: carried_on_ids, when already read."""
     sid = st.get('sessionId') or ''
     if st.get('state') not in RETIRED or not sid or sid in live:
         return False
@@ -583,7 +584,9 @@ def retired(st, live, jobs=None):
             return False
         if last_turn_interrupted(t):
             return False
-    return not carried_on(sid, at, jobs)
+    if carried is None:
+        carried = carried_on_ids(job_files() if jobs is None else jobs, at)
+    return sid not in carried
 
 
 def retired_named(name, reg=None, jobs=None):
@@ -597,42 +600,28 @@ def retired_named(name, reg=None, jobs=None):
     if not mine:
         return None
     newest = max(mine, key=lambda st: (when_ts(st.get('createdAt') or ''), when_ts(st.get('updatedAt') or '')))
-    return newest if retired(newest, {r.get('sessionId') for r in reg.values()}, jobs) else None
+    return newest if retired(newest, {r.get('sessionId') for r in reg.values()}, jobs=jobs) else None
 
 
 def asleep_sessions(reg, cwd):
     """Background sessions Claude Code retired after an hour at their prompt (`bg retire …`): no process, so not
-    live, but nobody closed them. Hive sub-sessions of the last few days, and any the panel lists as retired.
-    [(name, what it is, the job record)], newest first."""
+    live, but nobody closed them. Hive sub-sessions of the last few days, and any the panel lists as retired; not
+    one whose final debrief went out (it finished: the panel shows it ready to close). [(name, what it is, the
+    job record)], newest first."""
     live = {r.get('sessionId') for r in reg.values()}
     names = {r.get('name') for r in reg.values()}
     jobs = job_files()
     by_short = {}
     for _, st in jobs:
         sid = st.get('sessionId') or ''
-        if sid:
+        if sid and st.get('state') in RETIRED and sid not in live:
             by_short.setdefault(sid[:8], []).append(st)
-    found, seen = [], set()
-
-    def add(short, what, where, name=None):
-        if cwd and not same_workspace(where, cwd):
-            return
-        for st in by_short.get(short or '', []):
-            sid = st.get('sessionId')
-            if sid in seen or not retired(st, live, jobs):
-                continue
-            called = st.get('name') or name or sid[:8]
-            if called in names:
-                continue
-            seen.add(sid)
-            found.append((when_ts(st.get('updatedAt') or ''), called, what, st))
-            return
-
+    wanted = []
     for k in children():
         if k.get('bgId') and time.time() - (k.get('at') or 0) <= ASLEEP_DAYS * 86400:
             kind = f"{k['kind']} " if k.get('kind') in KINDS else ''
-            add(k['bgId'], f"{'successor' if k.get('successor') else kind + 'sub-session'} of {k.get('parent')}",
-                k.get('cwd'), k.get('name'))
+            wanted.append((k['bgId'], f"{'successor' if k.get('successor') else kind + 'sub-session'} of "
+                                      f"{k.get('parent')}", k.get('cwd'), k.get('name')))
     for f in glob.glob(os.path.join(SNAPSHOTS, '*.json')):
         try:
             with open(f) as fh:
@@ -641,7 +630,27 @@ def asleep_sessions(reg, cwd):
             continue
         for row in (sn.get('rows') if isinstance(sn, dict) else None) or []:
             if isinstance(row, dict) and row.get('retired') and isinstance(row.get('id'), str):
-                add(row['id'][:8], 'background session', row.get('cwd'), row.get('name'))
+                wanted.append((row['id'][:8], 'background session', row.get('cwd'), row.get('name')))
+    wanted = [w for w in wanted if by_short.get(w[0]) and not (cwd and not same_workspace(w[2], cwd))]
+    if not wanted:
+        return []
+    marks = {}
+    for r in read_lines(LOG):
+        if r.get('dir') in MARKS and r.get('fromId') and r.get('at', 0) >= marks.get(r['fromId'], {}).get('at', 0):
+            marks[r['fromId']] = r
+    since = min(when_ts(st.get('updatedAt') or '') for w in wanted for st in by_short[w[0]])
+    carried = carried_on_ids(jobs, since)
+    found, seen = [], set()
+    for short_id, what, _, name in wanted:
+        for st in by_short[short_id]:
+            sid = st.get('sessionId')
+            called = st.get('name') or name or sid[:8]
+            if sid in seen or called in names or (marks.get(sid) or {}).get('dir') == 'done' \
+                    or not retired(st, live, carried=carried):
+                continue
+            seen.add(sid)
+            found.append((when_ts(st.get('updatedAt') or ''), called, what, st))
+            break
     return [(n, w, st) for _, n, w, st in sorted(found, key=lambda x: -x[0])]
 
 
