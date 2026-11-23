@@ -145,11 +145,20 @@ class Harness {
 const fs = require('fs'); const dir = ${J(this.home)};
 if (process.argv[2] === 'stop') {
   fs.writeFileSync(dir + '/stop-args.json', JSON.stringify(process.argv.slice(2)));
+  fs.appendFileSync(dir + '/stop-calls.ndjson', JSON.stringify(process.argv[3]) + '\\n');
   const jobs = JSON.parse(fs.readFileSync(dir + '/bg-jobs.json', 'utf8'));
   const job = jobs[process.argv[3]];
   if (!job || !job.works) { process.stdout.write('no such session'); process.exit(1); }
   try { process.kill(job.pid, 'SIGTERM'); } catch {}
   process.stdout.write('stopped ' + process.argv[3]); process.exit(0);
+}
+if (process.argv[2] === '--bg') { // claude --bg --resume: recorded, answered from bg-replies.json in turn
+  const log = dir + '/bg-calls.ndjson';
+  fs.appendFileSync(log, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), awsProfile: process.env.AWS_PROFILE || null }) + '\\n');
+  const n = fs.readFileSync(log, 'utf8').trim().split('\\n').length;
+  let replies = []; try { replies = JSON.parse(fs.readFileSync(dir + '/bg-replies.json', 'utf8')); } catch {}
+  const r = replies[n - 1] || { out: 'Error: could not resume', exit: 1 };
+  process.stdout.write(r.out); process.exit(r.exit);
 }
 let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
   if (process.argv.includes('haiku')) { // a recap: recorded, answered from recap-reply.json
@@ -287,6 +296,16 @@ let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
   hiveMark(name, kind, fields = {}) {
     this.hive({ dir: kind, from: name, fromId: this.id(name), workspace: this.proj, ...fields });
   }
+  // What `claude --bg --resume` prints, call by call ({ out, exit }), and the calls it got.
+  bgReplies(rs) { fs.writeFileSync(path.join(this.home, 'bg-replies.json'), J(rs)); }
+  bgCalls() { try { return fs.readFileSync(path.join(this.home, 'bg-calls.ndjson'), 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)); } catch { return []; } }
+  stopCalls() { try { return fs.readFileSync(path.join(this.home, 'stop-calls.ndjson'), 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)); } catch { return []; } }
+  // Resolves once `ok()` holds; fails after 5 s.
+  async until(ok, what = 'condition') {
+    for (let i = 0; i < 100; i++) { if (ok()) return; await this.pause(50); }
+    throw new Error('timed out waiting for ' + what);
+  }
+
   // The recap model's next answers, what it has been sent, and waiting for it to finish.
   recapReply(text, exit = 0) { fs.writeFileSync(path.join(this.home, 'recap-reply.json'), J({ text, exit })); }
   recapCalls() {

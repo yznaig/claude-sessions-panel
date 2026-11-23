@@ -69,6 +69,8 @@ const { windowScope } = require('./window');
 const { readAway, writeAway } = require('./away');
 const { SearchIndex, askPrompt, readAnswer } = require('./search');
 const spawns = require('./spawns');
+const move = require('./move');
+const windowFolders = () => (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath);
 
 // ---- sound ------------------------------------------------------------------
 
@@ -267,8 +269,9 @@ class Provider {
       case 'focus': {
         this.back();
         list.act({ type: 'ack', id: m.id });
-        if (!(await this.handOver(m.id))) break;
-        try { await openSession(m.id); }
+        const open = await this.handOver(m.id);
+        if (!open) break;
+        try { await openSession(open); }
         catch (e) { vscode.window.showWarningMessage(`Claude Sessions: could not focus session (${e.message}).`); }
         break;
       }
@@ -356,10 +359,18 @@ class Provider {
   // off. Waiting on you (a permission prompt or a question) with nothing else in flight, it is handed
   // over too: the stop comes before anything you were asked about ran, and the note tells it to ask
   // again, so the prompt shows up here. Still working, or waiting inside a helper agent it started, it
-  // is left alone, with a terminal offer. Returns whether to go on and open it.
-  async handOver(id) {
+  // is left alone, with a terminal offer. It is stopped only if this window can open its transcript
+  // (move.js): one working in another folder (a git worktree) is moved into the window's folder first
+  // and its copy opened. Returns the id to open, or null.
+  async handOver(id, moved) {
+    const moving = this.moving || (this.moving = new Set());
+    if (moving.has(id)) {
+      vscode.window.setStatusBarMessage('Claude Sessions: that session is still being moved into this window; it opens once its copy has replied…', 6000);
+      return null;
+    }
     const reg = this.list.reg(id);
-    if (!reg || reg.kind !== 'bg') return true;
+    if (!reg) return this.wakeIn(id);
+    if (reg.kind !== 'bg') return id;
     const job = reg.jobId || String(reg.sessionId).slice(0, 8);
     const name = displayName(reg);
     const status = reg.status || 'idle';
@@ -379,20 +390,53 @@ class Provider {
         t.sendText(`claude attach ${job}`);
         t.show();
       }
-      return false;
+      return null;
+    }
+    // What the stop cuts off: a moved copy carries what its original was doing.
+    const what = moved ? moved.what : watching ? transcripts.watchingFor(reg) : '';
+    const needs = moved ? moved.needs : askAgain ? (waiting.needs || reg.waitingFor || 'your answer') : '';
+    const folders = windowFolders();
+    if (folders.length && !move.openFrom(folders, reg.sessionId)) {
+      if (!moved && transcripts.transcriptFor(reg)) return this.moveIn(reg, folders, { name, what: what || (watching ? 'a background command' : ''), needs });
+      vscode.window.showInformationMessage(`Claude Sessions: "${name}" can't be opened in this window: its conversation isn't saved under this window's folder (${folders.join(', ')}), so it was left running in the background. Watch it with "claude attach ${job}" in a terminal.`);
+      return null;
     }
     let dropNote = () => {};
-    if (watching) {
-      const what = transcripts.watchingFor(reg);
+    if (what) {
       dropNote = spawns.leaveResumeNote(os.homedir(), reg.sessionId, what);
-      vscode.window.setStatusBarMessage(`Claude Sessions: bringing "${name}" in; its watch${what ? ` (${what})` : ''} stops, and it will be told so it can start it again…`, 6000);
-    } else if (askAgain) {
-      const needs = waiting.needs || reg.waitingFor || 'your answer';
+      vscode.window.setStatusBarMessage(`Claude Sessions: bringing "${name}" in; its watch (${what}) stops, and it will be told so it can start it again…`, 6000);
+    } else if (needs) {
       dropNote = spawns.leaveResumeNote(os.homedir(), reg.sessionId, '', needs);
       vscode.window.setStatusBarMessage(`Claude Sessions: bringing "${name}" in; it will ask again here (${needs})…`, 6000);
+    } else if (watching) {
+      dropNote = spawns.leaveResumeNote(os.homedir(), reg.sessionId, '');
+      vscode.window.setStatusBarMessage(`Claude Sessions: bringing "${name}" in; its watch stops, and it will be told so it can start it again…`, 6000);
     } else {
       vscode.window.setStatusBarMessage(`Claude Sessions: bringing "${name}" in from the background…`, 4000);
     }
+    if (!(await this.stopJob(reg))) {
+      dropNote();
+      vscode.window.showInformationMessage(`Claude Sessions: couldn't stop "${name}" in the background, so it wasn't opened here (it would say it is open somewhere else). Try "claude stop ${job}" in a terminal.`);
+      return null;
+    }
+    this.look();
+    return id;
+  }
+
+  // A background session Claude Code retired (asleep, no process) whose conversation this window can't
+  // open: moved in the same way, with nothing to stop. Any other row opens as before.
+  wakeIn(id) {
+    const row = this.list.rows(true).find(r => r.id === id);
+    const folders = windowFolders();
+    if (!row || !row.retired || !folders.length || move.openFrom(folders, id)) return id;
+    const rec = { sessionId: id, cwd: row.cwd, name: row.name };
+    if (!transcripts.transcriptFor(rec)) return id;
+    return this.moveIn(rec, folders, { name: row.name, what: '', needs: row.retired === 'waiting' ? row.waitingFor : '', asleep: true });
+  }
+
+  // `claude stop`, then wait for its process to go. Whether it went.
+  async stopJob(reg) {
+    const job = reg.jobId || String(reg.sessionId).slice(0, 8);
     const stopped = await new Promise(resolve => {
       try {
         const child = require('child_process').execFile(claudeCommand(), ['stop', job], { cwd: reg.cwd || os.homedir(), timeout: 30e3 },
@@ -401,13 +445,67 @@ class Provider {
       } catch { resolve(false); }
     });
     for (let i = 0; stopped && i < 40 && pidAlive(reg); i++) await new Promise(r => setTimeout(r, 200));
-    if (!stopped || pidAlive(reg)) {
-      dropNote();
-      vscode.window.showInformationMessage(`Claude Sessions: couldn't stop "${name}" in the background, so it wasn't opened here (it would say it is open somewhere else). Try "claude stop ${job}" in a terminal.`);
-      return false;
+    return stopped && !pidAlive(reg);
+  }
+
+  // `claude --bg --resume` from `cwd`: the new job's id, or null.
+  resumeBg(reg, cwd, prompt) {
+    const job = move.jobState(reg.sessionId);
+    const args = move.resumeArgs(reg.sessionId, job, transcripts.transcriptFor(reg), prompt);
+    return new Promise(resolve => {
+      try {
+        const child = require('child_process').execFile(claudeCommand(), args, { cwd, env: move.resumeEnv(job), timeout: 90e3 },
+          (err, stdout, stderr) => resolve(err ? null : move.backgrounded(String(stdout) + String(stderr))));
+        child.stdin.end();
+      } catch { resolve(null); }
+    });
+  }
+
+  // A session working outside this window's folders (a git worktree): stopped, resumed in the background
+  // from the window's folder, and, once that copy has replied, handed over and opened in its place
+  // (decision e1123-25). A step that fails leaves it running, and says so.
+  async moveIn(reg, folders, how) {
+    this.moving.add(reg.sessionId);
+    try { return await this.moveInNow(reg, folders, how); } finally { this.moving.delete(reg.sessionId); }
+  }
+  async moveInNow(reg, folders, { name, what, needs, asleep }) {
+    const to = move.homeFolder(folders, reg.cwd);
+    vscode.window.setStatusBarMessage(`Claude Sessions: moving "${name}" into ${to} so it can open here…`, 10000);
+    if (!asleep && !(await this.stopJob(reg))) {
+      vscode.window.showInformationMessage(`Claude Sessions: "${name}" works in ${reg.cwd}, outside this window's folder, so it has to be moved before it can open here, and it couldn't be stopped to move it. It is still running in the background.`);
+      return null;
     }
     this.look();
-    return true;
+    const short = await this.resumeBg(reg, to, move.movedNote({ name, from: reg.cwd, to, watching: what, waiting: needs }));
+    if (!short && asleep) {
+      vscode.window.showInformationMessage(`Claude Sessions: couldn't move "${name}" into ${to} so it could open here. It stays asleep as it was, and a message still wakes it.`);
+      return null;
+    }
+    if (!short) {
+      const back = await this.resumeBg(reg, reg.cwd, move.backNote({ name, to }));
+      this.look();
+      vscode.window.showInformationMessage(back
+        ? `Claude Sessions: couldn't move "${name}" into ${to} so it could open here, so it was resumed where it was (${reg.cwd}) and runs in the background. Watch it with "claude attach ${back}" in a terminal.`
+        : `Claude Sessions: couldn't move "${name}" into ${to}, and resuming it where it was failed too. It is stopped; its conversation is kept. To carry it on: cd ${reg.cwd} && claude --resume ${reg.sessionId}`);
+      return null;
+    }
+    const copy = await this.settle(short, to);
+    if (!copy) {
+      vscode.window.showInformationMessage(`Claude Sessions: "${name}" was moved into ${to} and runs there in the background, but its copy hasn't replied yet. Click it again once it has.`);
+      return null;
+    }
+    return this.handOver(copy, { what, needs });
+  }
+
+  // Waits for the new job's session to reply to the move note: its session id, or null.
+  async settle(short, folder) {
+    const tries = Math.round((cfg().get('moveWaitSeconds') || 180) * 2);
+    for (let i = 0; i < tries; i++) {
+      const rec = readRegistry().find(r => r.jobId === short || String(r.sessionId).startsWith(short));
+      if (rec && move.settled(rec, move.transcriptIn(folder, rec.sessionId))) { this.look(); this.push(); return rec.sessionId; }
+      await new Promise(r => setTimeout(r, 500));
+    }
+    return null;
   }
 
   // The X: off the list and its process stopped. A session working, watching or waiting on you asks first.

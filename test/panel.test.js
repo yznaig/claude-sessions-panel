@@ -1182,9 +1182,10 @@ withHarness('a row carries the name other sessions know it by, and keeps it once
 // ---- background sessions (claude --bg): handed over on a click -------------
 
 withHarness('a background session that is done: a click stops it there and opens it here', async h => {
-  const a = h.session('a', { bg: true, slowStop: true });
+  const a = h.session('a', { bg: true, slowStop: true, transcript: [L.user('go'), L.text('Done.')] });
   h.start();
   await h.send({ type: 'focus', id: a.id });
+  same(h.bgCalls(), [], 'its folder is the window\'s: not moved');
   same(JSON.parse(require('fs').readFileSync(require('path').join(h.home, 'stop-args.json'), 'utf8')), ['stop', 'job-a']);
   assert.ok(!a.alive(), 'its background process is gone before the open');
   eq(h.executed.at(-1)[0], 'claude-vscode.editor.open'); eq(h.executed.at(-1)[1], a.id);
@@ -1204,11 +1205,12 @@ withHarness('a background session still working or waiting is left alone; you ca
 
 withHarness('a background session that will not stop is not opened twice', async h => {
   h.bgStopWorks = false;
-  const a = h.session('a', { bg: true });
+  const a = h.session('a', { bg: true, transcript: [L.text('Done.')] });
   h.start();
   const before = h.executed.length;
   await h.send({ type: 'focus', id: a.id });
   assert.ok(a.alive()); eq(h.executed.length, before); eq(h.told.length, 1);
+  assert.match(h.told[0], /couldn't stop/);
 });
 
 withHarness('a session started in VS Code opens as before, with no stop', async h => {
@@ -1217,6 +1219,136 @@ withHarness('a session started in VS Code opens as before, with no stop', async 
   await h.send({ type: 'focus', id: a.id });
   assert.ok(!require('fs').existsSync(require('path').join(h.home, 'stop-args.json')));
   eq(h.executed.at(-1)[1], a.id);
+});
+
+// ---- a background session working in a git worktree: moved into the window's folder, then opened ----
+// (decision e1123-25) Claude Code's VS Code panel opens only conversations saved under the window's folder.
+
+// A git worktree of the window's folder, and a background session working in it, with the daemon's record.
+function worktreeSession(h, name, opts = {}) {
+  const wt = path.join(h.home, 'wt-' + name);
+  fs.mkdirSync(wt, { recursive: true });
+  fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${h.proj}/.git/worktrees/${name}\n`);
+  const s = h.session(name, { bg: true, cwd: wt, transcript: [L.said('go', { cwd: wt }), L.text('Over to you.'), J({ type: 'permission-mode', permissionMode: 'auto' })], ...opts });
+  const dir = path.join(h.home, '.claude/jobs', s.id.slice(0, 8));
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'state.json'), J({ state: 'working', sessionId: s.id, name, respawnFlags: ['-n', name, '--model', 'opus'], providerEnv: { AWS_PROFILE: 'hire-dev', CLAUDE_BG_SESSION_CREDENTIAL: 'x' } }));
+  return { s, wt };
+}
+const J = o => JSON.stringify(o);
+
+withHarness('a background session in a git worktree: a click moves it into the window\'s folder, then opens its copy', async h => {
+  const { s: a, wt } = worktreeSession(h, 'wtmove');
+  h.bgReplies([{ out: 'backgrounded · job-wtcopy\n', exit: 0 }]);
+  h.start();
+  assert.ok(h.row('wtmove'), 'listed in its repo\'s window');
+  const clicked = h.send({ type: 'focus', id: a.id });
+  await h.until(() => h.bgCalls().length === 1, 'the resume');
+  const call = h.bgCalls()[0];
+  eq(call.cwd, h.proj, 'resumed from the window\'s folder');
+  same(call.args.slice(0, 9), ['--bg', '--resume', a.id, '-n', 'wtmove', '--model', 'opus', '--permission-mode', 'auto']);
+  eq(call.args[9], '--');
+  assert.match(call.args[10], /moved this session \(wtmove\)/); assert.ok(call.args[10].includes(wt), 'told where its files are');
+  eq(call.awsProfile, 'hire-dev');
+  assert.ok(!a.alive(), 'the original was stopped before the copy started');
+  // The copy starts, reads the note, and replies.
+  const b = h.session('wtcopy', { bg: true, status: 'busy', transcript: [
+    J({ type: 'derived-from', v: 1, sessionId: h.id('wtcopy'), sessions: [{ type: 'claude_code_session', id: a.id, via: 'fork' }] }), L.user(call.args[10])] });
+  const jd = path.join(h.home, '.claude/jobs', b.id.slice(0, 8));
+  fs.mkdirSync(jd, { recursive: true });
+  fs.writeFileSync(path.join(jd, 'state.json'), J({ state: 'working', sessionId: b.id, linkScanPath: path.join(h.home, '.claude/projects', h.proj.replace(/[^a-zA-Z0-9]/g, '-'), b.id + '.jsonl') }));
+  await h.pause(700);
+  eq(h.executed.filter(x => x[0] === 'claude-vscode.editor.open').length, 0, 'not opened before the copy replies');
+  h.transcript('wtcopy', [L.text('Hi again: I was on the glossary prep; over to you.')]); b.set('idle');
+  await clicked;
+  same(h.stopCalls(), ['job-wtmove', 'job-wtcopy']);
+  assert.ok(!b.alive(), 'the copy was handed over too');
+  eq(h.executed.at(-1)[0], 'claude-vscode.editor.open'); eq(h.executed.at(-1)[1], b.id);
+  eq(h.told.length, 0);
+  h.session('wtcopy'); // VS Code opened the copy: it runs here now, under the copy's id
+  h.step(); h.step(31e3);
+  eq(h.row('wtmove'), undefined, 'the original does not stay beside its copy');
+  eq(h.row('wtcopy').status, 'idle', 'the copy is listed, open here');
+});
+
+withHarness('a moved session that was watching a command or waiting on you: its copy opens with the note to start again', async h => {
+  const { s: a } = worktreeSession(h, 'wtwait', { status: 'waiting' });
+  fs.writeFileSync(path.join(h.home, '.claude/jobs', a.id.slice(0, 8), 'state.json'),
+    J({ state: 'working', sessionId: a.id, needs: 'answer: ship today?', inFlight: { tasks: 0, queued: 0 }, respawnFlags: ['-n', 'wtwait'] }));
+  h.bgReplies([{ out: 'backgrounded · job-wtcopy2', exit: 0 }]);
+  h.start();
+  const clicked = h.send({ type: 'focus', id: a.id });
+  await h.until(() => h.bgCalls().length === 1, 'the resume');
+  assert.match(h.bgCalls()[0].args.at(-1), /waiting on the user \(answer: ship today\?\)/);
+  const b = h.session('wtcopy2', { bg: true, transcript: [L.user(h.bgCalls()[0].args.at(-1)), L.text('Hi again; I asked whether to ship today.')] });
+  await clicked;
+  eq(h.executed.at(-1)[1], b.id);
+  const note = JSON.parse(fs.readFileSync(path.join(h.home, '.claude', 'session-hive', 'resume', b.id + '.json'), 'utf8'));
+  eq(note.waiting, 'answer: ship today?');
+});
+
+withHarness('a failed move leaves the session running where it was, and says so', async h => {
+  const { s: a, wt } = worktreeSession(h, 'wtfail');
+  h.bgReplies([{ out: 'Error: resume failed', exit: 1 }, { out: 'backgrounded · job-wtback', exit: 0 }]);
+  h.start();
+  const before = h.executed.length;
+  await h.send({ type: 'focus', id: a.id });
+  const calls = h.bgCalls();
+  eq(calls.length, 2); eq(calls[0].cwd, h.proj); eq(calls[1].cwd, wt, 'resumed back where it was');
+  same(calls[1].args.slice(0, 3), ['--bg', '--resume', a.id]); assert.match(calls[1].args.at(-1), /that failed/);
+  eq(h.executed.length, before, 'nothing opened');
+  eq(h.told.length, 1); assert.match(h.told[0], /couldn't move "wtfail".*resumed where it was/);
+});
+
+withHarness('a worktree session that will not stop is left running and not moved', async h => {
+  h.bgStopWorks = false;
+  const { s: a } = worktreeSession(h, 'wtstuck');
+  h.start();
+  const before = h.executed.length;
+  await h.send({ type: 'focus', id: a.id });
+  assert.ok(a.alive()); same(h.bgCalls(), []); eq(h.executed.length, before);
+  eq(h.told.length, 1); assert.match(h.told[0], /couldn't be stopped to move it\. It is still running/);
+});
+
+withHarness('a moved copy that does not reply in time is left running, and you are told to click again', async h => {
+  h.config.moveWaitSeconds = 1;
+  const { s: a } = worktreeSession(h, 'wtslow');
+  h.bgReplies([{ out: 'backgrounded · job-wtslow2', exit: 0 }]);
+  h.start();
+  const before = h.executed.length;
+  const clicked = h.send({ type: 'focus', id: a.id });
+  await h.until(() => h.bgCalls().length === 1, 'the resume');
+  await h.send({ type: 'focus', id: a.id }); // clicked again while it moves
+  await clicked;
+  eq(h.executed.length, before, 'neither click opened anything'); same(h.stopCalls(), ['job-wtslow']); eq(h.bgCalls().length, 1);
+  eq(h.told.length, 1); assert.match(h.told[0], /hasn't replied yet\. Click it again/);
+});
+
+withHarness('an asleep background session in a git worktree (retired by Claude Code) is moved in with nothing to stop, then opened', async h => {
+  const { s: a, wt } = worktreeSession(h, 'wtsleep');
+  h.start();
+  fs.writeFileSync(path.join(h.home, '.claude/jobs', a.id.slice(0, 8), 'state.json'), J({ state: 'blocked', needs: 'ship today?', sessionId: a.id, name: 'wtsleep',
+    updatedAt: new Date(h.now).toISOString(), linkScanPath: path.join(h.home, '.claude/projects', wt.replace(/[^a-zA-Z0-9]/g, '-'), a.id + '.jsonl') }));
+  await a.end(); h.step(); h.step(31e3);
+  eq(h.row('wtsleep').status, 'asleep');
+  h.bgReplies([{ out: 'backgrounded · job-wtwoke', exit: 0 }]);
+  const clicked = h.send({ type: 'focus', id: a.id });
+  await h.until(() => h.bgCalls().length === 1, 'the resume');
+  eq(h.bgCalls()[0].cwd, h.proj); assert.match(h.bgCalls()[0].args.at(-1), /waiting on the user \(ship today\?\)/);
+  const b = h.session('wtwoke', { bg: true, transcript: [L.user(h.bgCalls()[0].args.at(-1)), L.text('Hi again; I asked whether to ship today.')] });
+  await clicked;
+  same(h.stopCalls(), ['job-wtwoke'], 'only the copy is stopped, to hand it over');
+  eq(h.executed.at(-1)[1], b.id);
+});
+
+withHarness('a background session whose conversation this window can\'t find is never stopped', async h => {
+  const a = h.session('nofile', { bg: true }); // no transcript anywhere
+  h.start();
+  const before = h.executed.length;
+  await h.send({ type: 'focus', id: a.id });
+  await h.pause();
+  assert.ok(a.alive()); same(h.stopCalls(), []); same(h.bgCalls(), []); eq(h.executed.length, before);
+  assert.match(h.told[0], /can't be opened in this window/);
 });
 
 // ---- dot colors ----------------------------------------------------------------
@@ -1718,7 +1850,7 @@ withHarness('a background session watching a command: a click stops it, opens it
 
 withHarness('a watching background session that will not stop is not opened, and no note is left', async h => {
   h.bgStopWorks = false;
-  const a = h.session('a', { bg: true, status: 'shell' });
+  const a = h.session('a', { bg: true, status: 'shell', transcript: [L.text('Watching.')] });
   h.start();
   const before = h.executed.length;
   await h.send({ type: 'focus', id: a.id });
@@ -1727,7 +1859,7 @@ withHarness('a watching background session that will not stop is not opened, and
 });
 
 withHarness('a background session that is done opens with no note', async h => {
-  const a = h.session('a', { bg: true });
+  const a = h.session('a', { bg: true, transcript: [L.text('Done.')] });
   h.start();
   await h.send({ type: 'focus', id: a.id });
   assert.ok(!fs.existsSync(path.join(h.home, '.claude', 'session-hive', 'resume', a.id + '.json')));
@@ -1744,7 +1876,7 @@ function liveJob(h, name, { needs, inFlight }) {
 }
 
 withHarness('a background session waiting on a permission prompt: a click stops it, opens it here, and tells it to ask again', async h => {
-  const a = h.session('waitperm', { bg: true, status: 'waiting' });
+  const a = h.session('waitperm', { bg: true, status: 'waiting', transcript: [L.text('May I curl?')] });
   a.set('waiting', { waitingFor: 'permission prompt' });
   liveJob(h, 'waitperm', { needs: 'approve Bash: curl -sI https://example.org', inFlight: { tasks: 0, queued: 0, kinds: [] } });
   h.start();

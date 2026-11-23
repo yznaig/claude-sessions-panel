@@ -230,4 +230,4 @@ function displayName(rec) {
   return t.custom || t.ai || rec.name || String(rec.sessionId).slice(0, 8);
 }
 
-module.exports = { readTranscript, displayName, replyCost, lastWrite, watchingFor };
+module.exports = { readTranscript, displayName, replyCost, lastWrite, watchingFor, transcriptFor };
