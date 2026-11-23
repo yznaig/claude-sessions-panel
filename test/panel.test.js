@@ -177,6 +177,38 @@ withHarness('watching: a reply to your prompt that starts a watch turns green; t
   eq(h.row('a').status, 'watching'); eq(h.row('a').attention, null, 'its own check-in: gray'); same(h.takeSounds(), []);
 });
 
+withHarness('watching: a green reply you have not opened stays green through the turns the session starts itself', async h => {
+  // rocks-push-1122, 11-22: it answered you and kept a command running (green), then the command
+  // ended and woke it; that turn of its own cleared the unread green and it went back to watching gray.
+  const a = h.session('a', { status: 'busy', background: true, transcript: [L.said('yes 1-4', { at: h.now }), L.background('t1', 'Land the ticket edits'), L.started('t1'), L.text('Recorded all four; landing the edits.')] });
+  await h.pause(100);
+  h.start();
+  a.set('idle'); h.step();
+  eq(h.row('a').attention, 'ready'); same(h.takeSounds(), ['ready']);
+  h.transcript('a', [L.notified('t1'), L.background('t2', 'Land again'), L.started('t2')]);
+  a.set('busy'); h.step();
+  eq(h.row('a').attention, 'ready', 'its own turn keeps the unread green');
+  h.transcript('a', [L.text('Not landed yet; trying again.')]);
+  a.set('idle'); h.step();
+  eq(h.row('a').status, 'watching'); eq(h.row('a').attention, 'ready', 'still green, unread'); same(h.takeSounds(), [], 'no second sound');
+  // Your own next prompt is a new turn: that clears it as before.
+  h.transcript('a', [L.said('thanks', { at: h.now + 60_000 })]);
+  a.set('busy'); h.step();
+  eq(h.row('a').attention, null, 'your new prompt clears it');
+});
+
+withHarness('an idle green reply stays green through a turn the session starts itself', async h => {
+  const a = h.session('a', { status: 'busy', transcript: [L.said('check it', { at: h.now }), L.text('Done; here is what I found.')] });
+  h.start();
+  a.set('idle'); h.step();
+  eq(h.row('a').attention, 'ready'); same(h.takeSounds(), ['ready']);
+  h.transcript('a', [L.notified('t9')]);
+  a.set('busy'); h.step();
+  eq(h.row('a').attention, 'ready', 'still green while it works on its own');
+  a.set('idle'); h.step();
+  eq(h.row('a').attention, 'ready'); same(h.takeSounds(), [], 'no second sound');
+});
+
 withHarness('watching: no green when the turn only launched the command, or another session started it', async h => {
   const p = h.session('p', { status: 'busy', background: true, transcript: [L.peer('Re-queue the runner jobs', h.now), L.background('t1', 'Poll the queue'), L.started('t1'), L.text('Re-queued; polling.')] });
   const q = h.session('q', { status: 'busy', background: true, transcript: [L.said('merge it', { at: h.now }), L.text('Merging.'), L.background('t1', 'Poll deploy'), L.started('t1')] });

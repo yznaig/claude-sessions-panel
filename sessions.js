@@ -331,6 +331,9 @@ class SessionList {
     // id -> the prompt (its time) whose reply already turned a watching session green, so the turns
     // it starts by itself to check on its command don't turn it green again.
     this.greenTurn = new Map(carried ? carried.greenTurn || [] : []);
+    // id -> the turn (its start time) whose reply turned the row green. Until you open it, a turn the
+    // session starts itself (its command finishing, another session's message) keeps it green.
+    this.readyTurn = new Map(carried ? carried.readyTurn || [] : []);
     this.autoClosed = new Set(store.get(KEYS.autoClosed, []));      // "<id>:<closedAt>" already moved once
     this.regs = [];
     this.liveIds = new Set(live.map(r => r.sessionId));
@@ -360,7 +363,7 @@ class SessionList {
   running() { return this.regs; }
 
   handOver() {
-    return { prevStatus: [...this.prevStatus], attention: [...this.attention], greenTurn: [...this.greenTurn], ...this.saved.handOver() };
+    return { prevStatus: [...this.prevStatus], attention: [...this.attention], greenTurn: [...this.greenTurn], readyTurn: [...this.readyTurn], ...this.saved.handOver() };
   }
 
   entryOf(r, now) {
@@ -419,7 +422,10 @@ class SessionList {
         continue;
       }
       if (status === 'busy') {
-        this.attention.delete(id);
+        // Working again clears green, unless the reply is still unread and this turn isn't a new
+        // prompt of yours: then it stays green until you open it.
+        const unread = this.attention.get(id) === 'ready' && this.readyTurn.has(id) && (t.turnByPeer || t.turnAt === this.readyTurn.get(id));
+        if (!unread) this.attention.delete(id);
         if (prev !== undefined && prev !== 'busy') this.restore(id);
       } else if (status === 'waiting') {
         if (this.attention.get(id) !== 'waiting') {
@@ -433,6 +439,7 @@ class SessionList {
         // its command, or one that only launched the command, stays gray.
         const was = this.attention.get(id);
         this.attention.set(id, 'ready');
+        if (was !== 'ready') this.readyTurn.set(id, t.turnAt);
         if (status === 'watching') this.greenTurn.set(id, t.turnAt);
         this.restore(id);
         // A filed session's ready is a quiet dot on its tab; one that reported to the Desk, or is
@@ -445,7 +452,7 @@ class SessionList {
     }
     for (const r of regs) if (this.attention.get(r.sessionId) === 'ready') this.asleep.markReady(r.sessionId, r.pid);
     for (const id of [...this.prevStatus.keys()]) {
-      if (!seen.has(id)) { this.prevStatus.delete(id); this.attention.delete(id); this.greenTurn.delete(id); }
+      if (!seen.has(id)) { this.prevStatus.delete(id); this.attention.delete(id); this.greenTurn.delete(id); this.readyTurn.delete(id); }
     }
     this.firstLoad = false;
     this.regs = regs;
