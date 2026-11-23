@@ -215,7 +215,7 @@ class Hive(unittest.TestCase):
         jobs = os.path.join(self.home, '.claude', 'jobs', bg)
         os.makedirs(jobs, exist_ok=True)
         with open(os.path.join(jobs, 'state.json'), 'w') as f:
-            json.dump({'state': state, 'needs': needs, 'sessionId': sid, 'updatedAt': iso(updated),
+            json.dump({'state': state, 'needs': needs, 'sessionId': sid, 'updatedAt': iso(updated), 'name': name,
                        'linkScanPath': os.path.join(self.home, '.claude', 'projects', '-work-repo', sid + '.jsonl')}, f)
 
     def test_peers_lists_a_sub_session_claude_code_stopped_while_it_waits_on_the_user(self):
@@ -226,8 +226,10 @@ class Hive(unittest.TestCase):
         self.asleep_kid('far-away', 'aa99bb88', t, t, cwd='/elsewhere')
         out = self.run_hive('peers')
         self.assertIn('Asleep, waiting on the user', out)
-        self.assertIn('**ship-day-x** — sub-session of work-aa · asks: "#1 ship today?"', out)
-        for name in ('moved-on', 'finished', 'far-away'):
+        self.assertIn('**ship-day-x** — sit-down sub-session of work-aa · asks: "#1 ship today?"', out)
+        self.assertIn('Asleep, idle', out)
+        self.assertIn('**finished** — sit-down sub-session of work-aa', out.split('Asleep, idle')[1])
+        for name in ('moved-on', 'far-away'):
             self.assertNotIn(f'**{name}**', out)
 
     def test_peers_leaves_other_workspaces_out_but_counts_them(self):
@@ -1971,6 +1973,186 @@ class Hive(unittest.TestCase):
         self.assertIn("# The user's own turns in", out)
         self.assertIn('(the opening brief a spawn gave it is left out)', out)
         self.assertIn('# Subagent reports received:', out)
+
+
+class Asleep(unittest.TestCase):
+    """Background sessions Claude Code's daemon retired after an hour at their prompt: listed, and woken by a message.
+    Borrows Hive's fixtures, not its tests."""
+    register, transcript, fake_claude, spawns, run_hive, log, snapshot, add_log = (
+        Hive.register, Hive.transcript, Hive.fake_claude, Hive.spawns, Hive.run_hive, Hive.log, Hive.snapshot, Hive.add_log)
+
+    def setUp(self):
+        Hive.setUp(self)
+        self.repo = os.path.join(self.home, 'repo')
+        os.makedirs(self.repo)
+
+    def iso(self, t):
+        return time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime(t))
+
+    def job(self, name, short, state='done', needs='', at=None, lines=None, created=None, cwd=None, head=()):
+        """A retired background job: its state.json and transcript, as Claude Code's daemon leaves them."""
+        at = at or time.time() - 4000
+        sid = short + '-1111-2222-3333-444455556666'
+        recs = list(head) + [{'type': 'permission-mode', 'permissionMode': 'auto', 'sessionId': sid}] + (lines or [
+            {'type': 'assistant', 'timestamp': self.iso(at), 'message': {'content': [{'type': 'text', 'text': 'Waiting on a lock.'}],
+                                                                       'usage': {'input_tokens': 1000, 'cache_read_input_tokens': 40000}}}])
+        self.transcript(sid, cwd or self.repo, recs)
+        d = os.path.join(self.home, '.claude', 'jobs', short)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, 'state.json'), 'w') as f:
+            json.dump({'state': state, 'needs': needs, 'sessionId': sid, 'name': name, 'cwd': cwd or self.repo,
+                       'updatedAt': self.iso(at), 'createdAt': self.iso(created or at - 600),
+                       'respawnFlags': ['-n', name, '--model', 'opus'], 'providerEnv': {'AWS_PROFILE': 'dev', 'CLAUDE_BG_SESSION_CREDENTIAL': 'x'},
+                       'linkScanPath': os.path.join(self.home, '.claude', 'projects', '-work-repo', sid + '.jsonl')}, f)
+        return sid
+
+    def wake(self, to, text='Debrief from sub-session kid: landed, 12 tests pass', usage=None, env=None):
+        extra = ('--usage', str(usage)) if usage is not None else ()
+        return json.loads(self.run_hive('wake', '--to', to, *extra, stdin=text, env_extra=env))
+
+    # --- the list ---
+
+    def test_peers_lists_a_session_retired_while_idle_from_the_panels_list(self):
+        sid = self.job('desk-34', 'd8dd355a')
+        self.job('stopped-one', 'eeee0001', state='stopped')
+        self.job('esc-one', 'eeee0002', lines=[{'type': 'user', 'message': {'content': '[Request interrupted by user]'}}])
+        self.snapshot([{'id': sid, 'name': 'Desk 34', 'cwd': '/work/repo', 'state': 'asleep', 'retired': 'idle'},
+                       {'id': 'eeee0001-1111-2222-3333-444455556666', 'cwd': '/work/repo', 'retired': 'idle'},
+                       {'id': 'eeee0002-1111-2222-3333-444455556666', 'cwd': '/work/repo', 'retired': 'idle'}])
+        out = self.run_hive('peers')
+        self.assertIn('Asleep, idle', out)
+        self.assertIn('**desk-34** — background session', out)
+        self.assertNotIn('stopped-one', out, 'claude stop ended it on purpose')
+        self.assertNotIn('esc-one', out, 'the user interrupted it')
+
+    def test_peers_leaves_out_a_retired_session_resumed_as_a_new_job(self):
+        old = self.job('desk-34', 'd8dd355a')
+        self.job('desk-34', '599c535b', state='working', created=time.time(),
+                 head=[{'type': 'derived-from', 'v': 1, 'sessions': [{'id': old, 'via': 'fork'}]}])
+        self.snapshot([{'id': old, 'cwd': '/work/repo', 'retired': 'idle'}])
+        self.assertNotIn('desk-34', self.run_hive('peers'))
+
+    # --- waking ---
+
+    def test_a_message_to_a_retired_idle_session_resumes_it_with_the_message_as_its_prompt(self):
+        sid = self.job('desk-34', 'd8dd355a')
+        v = self.wake('desk-34', usage=20)
+        self.assertEqual(v, {'action': 'woke', 'job': 'abcd1234'})
+        (call,) = self.spawns()
+        argv = call['argv']
+        self.assertEqual(argv[:3], ['--bg', '--resume', sid])
+        self.assertEqual(argv[3:9], ['-n', 'desk-34', '--model', 'opus', '--permission-mode', 'auto'])
+        self.assertEqual(call['cwd'], self.repo)
+        prompt = argv[argv.index('--') + 1]
+        self.assertIn('Claude Code retired this session (desk-34) after an hour at its prompt', prompt)
+        self.assertIn('a message from work-aa woke it', prompt)
+        self.assertIn('[session hive] From another session, not the user', prompt)
+        self.assertTrue(prompt.endswith('Debrief from sub-session kid: landed, 12 tests pass'))
+        woke = [r for r in self.log() if r.get('dir') == 'woke']
+        self.assertEqual((woke[0]['to'], woke[0]['toId'], woke[0]['job']), ('desk-34', sid, 'abcd1234'))
+
+    def test_a_woken_session_is_told_to_take_its_role_again_and_reads_the_notes_that_waited(self):
+        sid = self.job('desk-34', 'd8dd355a')
+        self.add_log({'at': time.time() - 5000, 'dir': 'role', 'from': 'desk-34', 'fromId': sid,
+                      'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'})
+        held = os.path.join(self.home, '.claude', 'session-hive', 'held', sid + '.ndjson')
+        os.makedirs(os.path.dirname(held))
+        with open(held, 'w') as f:
+            f.write(json.dumps({'at': time.time() - 100, 'from': 'runner-b', 'text': 'B landed.'}) + '\n')
+        self.wake('desk-34')
+        prompt = self.spawns()[0]['argv'][-1]
+        self.assertIn('You held the desk role for hire: take it again now', prompt)
+        self.assertIn("role --workspace /work/repo --area hire --role desk", prompt)
+        self.assertIn('--- from runner-b ---\nB landed.', prompt)
+        self.assertFalse(os.path.exists(held), 'the notes went with the wake')
+
+    def test_a_blocked_session_woken_is_told_to_ask_the_user_again(self):
+        self.job('ship-day', 'aa11bb22', state='blocked', needs='#1 ship today?')
+        self.wake('ship-day', 'Question: is 712 merged?')
+        self.assertIn('You were waiting on the user ("#1 ship today?")', self.spawns()[0]['argv'][-1])
+
+    def test_a_woken_sub_session_keeps_its_place(self):
+        self.job('kid-x', 'cafe0001')
+        os.makedirs(os.path.join(self.home, '.claude', 'session-hive'), exist_ok=True)
+        with open(os.path.join(self.home, '.claude', 'session-hive', 'children.json'), 'w') as f:
+            json.dump([{'name': 'kid-x', 'parent': 'work-aa', 'bgId': 'cafe0001', 'at': time.time()}], f)
+        self.wake('kid-x', 'Question: which branch?')
+        kids = json.load(open(os.path.join(self.home, '.claude', 'session-hive', 'children.json')))
+        self.assertEqual((kids[0]['bgId'], kids[0]['wokeFrom']), ('abcd1234', ['cafe0001']))
+
+    def test_two_messages_start_it_once(self):
+        self.job('desk-34', 'd8dd355a')
+        self.assertEqual(self.wake('desk-34')['action'], 'woke')
+        v = self.wake('desk-34', 'Question: second?', env={'HIVE_WAKE_LIVE_SECONDS': '1'})
+        self.assertEqual(v['action'], 'hold')
+        self.assertIn('another message is waking it', v['reason'])
+        self.assertEqual(len(self.spawns()), 1)
+
+    def test_a_second_message_goes_through_once_the_woken_session_is_up(self):
+        self.job('desk-34', 'd8dd355a')
+        self.wake('desk-34')
+        p = subprocess.Popen(['sleep', '30'])
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        self.register(p.pid, 'abcd1234-new', 'desk-34', self.repo)
+        self.assertEqual(self.wake('desk-34', 'Question: second?')['action'], 'none', 'live again: sent as addressed')
+
+    def test_wake_limits_hold_the_message_for_it(self):
+        sid = self.job('parked-one', 'aaaa0001')
+        self.snapshot([{'id': sid, 'parked': True}])
+        self.assertIn('parked in the panel', self.wake('parked-one')['reason'])
+        self.job('busy-window', 'aaaa0002')
+        self.assertIn('80% used', self.wake('busy-window', 'Question: x?', usage=80)['reason'])
+        big = [{'type': 'assistant', 'timestamp': self.iso(time.time() - 4000),
+                'message': {'content': [{'type': 'text', 'text': 'x'}], 'usage': {'cache_read_input_tokens': 450000}}}]
+        self.job('long-one', 'aaaa0003', lines=big)
+        self.assertIn('long (450k tokens)', self.wake('long-one')['reason'])
+        self.assertEqual(self.spawns(), [])
+        notes = self.run_hive('held', self_id=sid)   # opened later, it reads the message
+        self.assertIn('Debrief from sub-session kid', notes)
+        self.assertEqual(self.wake('long-one', '[keep going] the lock is free')['action'], 'woke', "can't wait: as receive")
+
+    def test_a_session_is_woken_at_most_twice_a_day(self):
+        self.job('desk-34', 'd8dd355a')
+        wakes = os.path.join(self.home, '.claude', 'session-hive', 'wakes.ndjson')
+        os.makedirs(os.path.dirname(wakes), exist_ok=True)
+        with open(wakes, 'w') as f:
+            for ago in (5000, 3000):
+                f.write(json.dumps({'at': time.time() - ago, 'name': 'desk-34', 'sessionId': 'older', 'by': 'auto-resume'}) + '\n')
+        v = self.wake('desk-34')
+        self.assertEqual(v['action'], 'hold')
+        self.assertIn('woken 2 times in 24 hours', v['reason'])
+
+    def test_wake_leaves_alone_what_is_not_a_retired_background_session(self):
+        self.job('stopped-one', 'eeee0001', state='stopped')
+        self.job('esc-one', 'eeee0002', lines=[{'type': 'user', 'message': {'content': '[Request interrupted by user]'}}])
+        for to in ('stopped-one', 'esc-one', 'nobody', 'work-bb'):
+            self.assertEqual(self.wake(to)['action'], 'none', to)
+        self.assertEqual(self.spawns(), [])
+
+    def test_redirect_flags_a_retired_recipient_for_the_send_hook(self):
+        self.job('desk-34', 'd8dd355a')
+        self.assertEqual(json.loads(self.run_hive('redirect', '--to', 'desk-34', stdin='Question: x?')),
+                         {'action': 'keep', 'asleep': True})
+        self.assertEqual(json.loads(self.run_hive('redirect', '--to', 'work-bb', stdin='Question: x?')), {'action': 'keep'})
+
+    def test_debrief_and_who_name_a_retired_parent_as_asleep(self):
+        sid = self.job('desk-34', 'd8dd355a')
+        p = subprocess.Popen(['sleep', '60'])
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        self.register(p.pid, 'kid-0004', 'kid-cc', '/work/repo')
+        with open(self._mk_children(), 'w') as f:
+            json.dump([{'name': 'kid-cc', 'parent': 'desk-34', 'parentId': sid, 'at': time.time(),
+                        'route': {'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'}}], f)
+        self.add_log({'at': time.time() - 5000, 'dir': 'role', 'from': 'desk-34', 'fromId': sid,
+                      'workspace': '/work/repo', 'area': 'hire', 'role': 'desk'})
+        out = self.run_hive('debrief', self_id='kid-0004')
+        self.assertTrue(out.startswith('desk-34  (the last desk for hire; asleep'), out)
+        self.assertIn('your debrief wakes it', out)
+        self.assertIn('desk-34 (asleep', self.run_hive('who', '--workspace', '/work/repo', '--area', 'hire', '--role', 'desk'))
+
+    def _mk_children(self):
+        os.makedirs(os.path.join(self.home, '.claude', 'session-hive'), exist_ok=True)
+        return os.path.join(self.home, '.claude', 'session-hive', 'children.json')
 
 
 if __name__ == '__main__':

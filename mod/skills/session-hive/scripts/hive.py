@@ -44,6 +44,9 @@
                                   session, prints {"action": "redirect", "to", "text"} so it reaches the holder; else keep
   reread [--transcript FILE]      the user's typed turns and each subagent report's side findings from a session's
                                   transcript (a successor's spawn record names its predecessor's): its first step
+  wake   --to NAME [--usage N]    for a message about to go to a session that is not live (text on stdin): when
+                                  Claude Code retired it at its prompt (a `claude --bg` job left an hour), resume it
+                                  with the message as its prompt, once, within the wake limits; else it waits
   check  [--to NAME]              for a message about to be sent (text on stdin): refuses a final debrief while
                                   this session has a background task open, naming each
   done                            mark this session ready to close again after follow-up work (same check)
@@ -74,7 +77,7 @@ SNAPSHOTS = os.path.join(HOME, '.claude', 'sessions-panel')
 
 LIST_CAP = 8                 # sessions shown at startup
 ASLEEP_CAP = 3               # of those, listed at startup
-ASLEEP_DAYS = 3              # a sub-session Claude Code stopped while it waited on the user is listed this long
+ASLEEP_DAYS = 3              # a sub-session Claude Code retired at its prompt is listed this long
 MOVED_ON_S = 60              # a turn this long after its job blocked: the conversation went on elsewhere
 TOKEN_LIMIT = 400_000        # don't wake a session whose context is past this
 BOUNDARY_TOKENS = 150_000    # from here, at a boundary, the session asks whether the next piece of work will fit (e1120-37, 32d)
@@ -458,14 +461,21 @@ def cmd_peers(a):
             out.append(f'…and {len(here) - len(shown)} more; `peers --all` lists every one.')
     if elsewhere and not a.all:
         out.append(f'{elsewhere} more sessions are live in other workspaces (`peers --all`).')
-    asleep = asleep_kids(reg, None if a.all else cwd)
-    if asleep:
-        out.append('\nAsleep, waiting on the user (Claude Code stopped them after an hour without an answer; a '
-                   'message does not reach them, the user opens one to answer it):')
-        for k, needs in asleep[:ASLEEP_CAP]:
-            out.append(f"- **{k.get('name')}** — sub-session of {k.get('parent')}" + (f' · asks: "{short(needs, 140)}"' if needs else ''))
-        if len(asleep) > ASLEEP_CAP:
-            out.append(f'…and {len(asleep) - ASLEEP_CAP} more.')
+    asleep = asleep_sessions(reg, None if a.all else cwd)
+    for state, title in (('blocked', 'Asleep, waiting on the user (Claude Code stopped them after an hour without an '
+                                     'answer; the user opens one to answer it, and a message wakes one, though the '
+                                     'question still waits for the user):'),
+                         ('done', 'Asleep, idle (Claude Code stopped them after an hour at the prompt; a message or '
+                                  'debrief to one wakes it):')):
+        group = [x for x in asleep if x[2].get('state') == state]
+        if not group:
+            continue
+        out.append('\n' + title)
+        for name, what, st in group[:ASLEEP_CAP]:
+            needs = st.get('needs') if state == 'blocked' and isinstance(st.get('needs'), str) else ''
+            out.append(f"- **{name}** — {what}" + (f' · asks: "{short(needs, 140)}"' if needs else ''))
+        if len(group) > ASLEEP_CAP:
+            out.append(f'…and {len(group) - ASLEEP_CAP} more.')
     print('\n'.join(out))
     return 0
 
@@ -481,32 +491,335 @@ def last_turn_at(path):
     return max((when_ts(t) for t in re.findall(r'"timestamp":\s*"([^"]+)"', text)), default=0)
 
 
-def asleep_kids(reg, cwd):
-    """Background sub-sessions Claude Code retired after an hour waiting on the user (`bg retire …: idle-prompt`):
-    no process, so not live, but their job (~/.claude*/jobs/<bgId>/state.json) is still blocked on the user and the
-    conversation has not moved on since. [(children.json entry, what it asks)], newest first."""
-    live = {r.get('sessionId') for r in reg.values()}
-    found = []
-    for k in children():
-        bg = k.get('bgId')
-        if not bg or (cwd and not same_workspace(k.get('cwd'), cwd)) or time.time() - (k.get('at') or 0) > ASLEEP_DAYS * 86400:
+INTERRUPTED = '[Request interrupted by user'   # how the transcript records an Esc
+RETIRED = ('blocked', 'done')   # a job's state after Claude Code's daemon retired it at its prompt
+
+
+def last_turn_interrupted(path):
+    """Whether the transcript's last turn is one the user interrupted (Esc)."""
+    try:
+        with open(path, 'rb') as f:
+            f.seek(max(0, os.path.getsize(path) - 65536))
+            lines = f.read().decode('utf-8', 'replace').splitlines()
+    except OSError:
+        return False
+    for line in reversed(lines):
+        if not re.search(r'"type":\s*"(user|assistant)"', line):
             continue
-        for f in glob.glob(os.path.join(HOME, '.claude*', 'jobs', bg, 'state.json')):
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(r, dict) or r.get('type') not in ('user', 'assistant') or r.get('isSidechain') or r.get('isMeta'):
+            continue
+        if r['type'] == 'assistant':
+            return False
+        c = (r.get('message') or {}).get('content')
+        said = c if isinstance(c, str) else ' '.join(b.get('text', '') for b in c or [] if isinstance(b, dict) and b.get('type') == 'text')
+        return said.startswith(INTERRUPTED)
+    return False
+
+
+def forked_from(path):
+    """The session ids a transcript's derived-from record says it forked from (`claude --bg --resume` copies a
+    session under a new id), or [] when it names none."""
+    try:
+        with open(path, 'rb') as f:
+            head = f.read(16384).decode('utf-8', 'replace').splitlines()
+    except OSError:
+        return []
+    for line in head:
+        if '"derived-from"' in line:
             try:
-                with open(f) as fh:
-                    st = json.load(fh)
-            except (OSError, ValueError):
+                r = json.loads(line)
+            except ValueError:
                 continue
-            sid = st.get('sessionId') or ''
-            if st.get('state') != 'blocked' or not sid.startswith(bg) or sid in live:
+            return [x.get('id') for x in r.get('sessions') or [] if isinstance(x, dict) and x.get('via') == 'fork']
+        if re.search(r'"type":\s*"(user|assistant)"', line):
+            return []
+    return []
+
+
+def job_files():
+    """[(state.json path, its record)] for every background job Claude Code's daemon keeps."""
+    out = []
+    for f in glob.glob(os.path.join(HOME, '.claude*', 'jobs', '*', 'state.json')):
+        try:
+            with open(f) as fh:
+                st = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if isinstance(st, dict):
+            out.append((f, st))
+    return out
+
+
+def carried_on(sid, since, jobs=None):
+    """Whether a background job started since `since` (seconds) forked this session: it carries on there."""
+    for f, st in jobs if jobs is not None else job_files():
+        try:
+            if os.path.getmtime(f) < since - 60:
                 continue
-            at = when_ts(st.get('updatedAt') or '')
-            t = st.get('linkScanPath')
-            if isinstance(t, str) and at and last_turn_at(t) > at + MOVED_ON_S:
+        except OSError:
+            continue
+        t = st.get('linkScanPath')
+        if st.get('sessionId') != sid and isinstance(t, str) and sid in forked_from(t):
+            return True
+    return False
+
+
+def retired(st, live, jobs=None):
+    """Whether a background job's session sits retired: Claude Code's daemon ended its process after an hour at
+    its prompt (`bg retire …`), whether it asked the user something (blocked) or was idle (done), and nothing has
+    carried the conversation on since (opened in VS Code, resumed as another job). Not after `claude stop`
+    (stopped), nor when the user interrupted its last turn (Esc)."""
+    sid = st.get('sessionId') or ''
+    if st.get('state') not in RETIRED or not sid or sid in live:
+        return False
+    at = when_ts(st.get('updatedAt') or '')
+    t = st.get('linkScanPath')
+    if isinstance(t, str):
+        if at and last_turn_at(t) > at + MOVED_ON_S:
+            return False
+        if last_turn_interrupted(t):
+            return False
+    return not carried_on(sid, at, jobs)
+
+
+def retired_named(name, reg=None, jobs=None):
+    """The job record of the session other sessions address as `name`, when its newest job sits retired (see
+    `retired`) and no live session carries that name; else None."""
+    reg = registry() if reg is None else reg
+    if not name or any(r.get('name') == name for r in reg.values()):
+        return None
+    jobs = job_files() if jobs is None else jobs
+    mine = [st for _, st in jobs if st.get('name') == name]
+    if not mine:
+        return None
+    newest = max(mine, key=lambda st: (when_ts(st.get('createdAt') or ''), when_ts(st.get('updatedAt') or '')))
+    return newest if retired(newest, {r.get('sessionId') for r in reg.values()}, jobs) else None
+
+
+def asleep_sessions(reg, cwd):
+    """Background sessions Claude Code retired after an hour at their prompt (`bg retire …`): no process, so not
+    live, but nobody closed them. Hive sub-sessions of the last few days, and any the panel lists as retired.
+    [(name, what it is, the job record)], newest first."""
+    live = {r.get('sessionId') for r in reg.values()}
+    names = {r.get('name') for r in reg.values()}
+    jobs = job_files()
+    by_short = {}
+    for _, st in jobs:
+        sid = st.get('sessionId') or ''
+        if sid:
+            by_short.setdefault(sid[:8], []).append(st)
+    found, seen = [], set()
+
+    def add(short, what, where, name=None):
+        if cwd and not same_workspace(where, cwd):
+            return
+        for st in by_short.get(short or '', []):
+            sid = st.get('sessionId')
+            if sid in seen or not retired(st, live, jobs):
                 continue
-            found.append((at, k, st.get('needs') if isinstance(st.get('needs'), str) else ''))
-            break
-    return [(k, needs) for _, k, needs in sorted(found, key=lambda x: -x[0])]
+            called = st.get('name') or name or sid[:8]
+            if called in names:
+                continue
+            seen.add(sid)
+            found.append((when_ts(st.get('updatedAt') or ''), called, what, st))
+            return
+
+    for k in children():
+        if k.get('bgId') and time.time() - (k.get('at') or 0) <= ASLEEP_DAYS * 86400:
+            kind = f"{k['kind']} " if k.get('kind') in KINDS else ''
+            add(k['bgId'], f"{'successor' if k.get('successor') else kind + 'sub-session'} of {k.get('parent')}",
+                k.get('cwd'), k.get('name'))
+    for f in glob.glob(os.path.join(SNAPSHOTS, '*.json')):
+        try:
+            with open(f) as fh:
+                sn = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        for row in (sn.get('rows') if isinstance(sn, dict) else None) or []:
+            if isinstance(row, dict) and row.get('retired') and isinstance(row.get('id'), str):
+                add(row['id'][:8], 'background session', row.get('cwd'), row.get('name'))
+    return [(n, w, st) for _, n, w, st in sorted(found, key=lambda x: -x[0])]
+
+
+# ---------- waking a retired session ----------
+
+WAKES = os.path.join(HIVE, 'wakes.ndjson')   # one line per wake: the hive's, and auto-resume's restarts
+WAKE_PER_DAY = 2             # wakes of one session (by name) in 24 hours; then messages wait for the user (auto-resume's cap)
+WAKE_SETTLE_SECONDS = 120    # a wake this recent is still starting: a second message waits for it instead of starting another
+WAKE_LIVE_SECONDS = float(os.environ.get('HIVE_WAKE_LIVE_SECONDS', 30))   # how long a second message waits for it
+
+
+def wake_lock():
+    import fcntl
+    os.makedirs(HIVE, exist_ok=True)
+    lock = open(WAKES + '.lock', 'w')
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    return lock
+
+
+def claim_wake(name, session_id, by, start, limit=True):
+    """Start a retired session once, whoever asks: under one lock, refuse while another wake of the same name or
+    session is starting ('settling'), or past WAKE_PER_DAY when `limit` ('limit'); else call `start()` -> (ok, said)
+    and record it. Returns (outcome, said): 'woke' | 'failed' | 'settling' | 'limit'. auto-resume calls it too."""
+    lock = wake_lock()
+    try:
+        now = time.time()
+        mine = [w for w in read_lines(WAKES) if (w.get('name') == name or w.get('sessionId') == session_id)
+                and now - w.get('at', 0) < 86400]
+        if any(now - w.get('at', 0) < WAKE_SETTLE_SECONDS for w in mine):
+            return 'settling', None
+        if limit and len(mine) >= WAKE_PER_DAY:
+            return 'limit', f'woken {len(mine)} times in 24 hours already'
+        ok, said = start()
+        if ok:
+            append(WAKES, {'at': time.time(), 'name': name, 'sessionId': session_id, 'by': by, 'said': said})
+        return ('woke' if ok else 'failed'), said
+    finally:
+        lock.close()
+
+
+def resume_bg(st, prompt):
+    """`claude --bg --resume` of a retired job's session, from its folder and config dir, with its name, model and
+    permission mode: (ok, its new job id or why it did not start)."""
+    import subprocess
+    t = st.get('linkScanPath') if isinstance(st.get('linkScanPath'), str) else ''
+    flags = [str(x) for x in st.get('respawnFlags') or []]
+    if '-n' not in flags and '--name' not in flags and st.get('name'):
+        flags += ['-n', st['name']]
+    mode = None
+    try:
+        with open(t, errors='replace') as f:
+            for line in f:
+                if '"permission-mode"' in line:
+                    try:
+                        mode = json.loads(line).get('permissionMode') or mode
+                    except ValueError:
+                        pass
+    except OSError:
+        pass
+    if mode and '--permission-mode' not in flags:
+        flags += ['--permission-mode', mode]
+    env = dict(os.environ)
+    for k, v in (st.get('providerEnv') or {}).items():
+        if isinstance(v, str) and not k.startswith('CLAUDE_'):
+            env.setdefault(k, v)
+    config = t.split('/projects/')[0] if '/projects/' in t else ''
+    if config and os.path.abspath(config) != os.path.join(HOME, '.claude'):
+        env['CLAUDE_CONFIG_DIR'] = config
+    try:
+        p = subprocess.run([CLAUDE, '--bg', '--resume', st['sessionId'], *flags, '--', prompt], cwd=st.get('cwd'),
+                           env=env, capture_output=True, text=True, timeout=90, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, f'claude --bg did not start: {e}'
+    said = (p.stdout + p.stderr).strip()
+    m = re.search(r'backgrounded\s*·\s*([0-9a-f]{6,})', said)
+    if p.returncode != 0 or not m:
+        return False, 'claude --bg did not start: ' + short(said, 200)
+    return True, m.group(1)
+
+
+def wake_prompt(st, sender, text, held):
+    """What a woken session reads as its prompt: why it is awake, what it still owes, the notes that waited for it,
+    then the message with the hive's reminder."""
+    name = st.get('name') or st['sessionId'][:8]
+    out = [f"[session hive] Claude Code retired this session ({name}) after an hour at its prompt, and a message from "
+           f"{sender} woke it: you carry on in the background as a resumed copy under a new session id. First check "
+           "what finished while you slept (files, commits, background tasks, messages in `log`) so nothing runs twice."]
+    for r in roles_of(st['sessionId']):
+        route = {'workspace': r.get('workspace'), 'area': r.get('area'), 'role': r.get('role')}
+        out.append(f"You held the {r.get('role')} role for {r.get('area')}: take it again now, under your new id: "
+                   f"`{role_command(route)}`.")
+    if st.get('state') == 'blocked':
+        q = st.get('needs') if isinstance(st.get('needs'), str) else ''
+        out.append('You were waiting on the user' + (f' ("{short(q, 200)}")' if q else '') + ': deal with the message, '
+                   'then ask the user that again, the same way.')
+    if held:
+        out.append(f'{len(held)} earlier message(s) waited for you while you slept:')
+        for n in held:
+            out.append(f"--- from {n.get('from')} ---\n{str(n.get('text', '')).strip()}")
+    out.append(f'--- the message that woke you, from {sender} ---\n' + REMINDER + '\n\n' + text)
+    return '\n\n'.join(out)
+
+
+def moved_child(old_short, new_short):
+    """A woken sub-session keeps its place: its children.json entry follows it to its new job id."""
+    import fcntl
+    with open(CHILDREN + '.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        kids = children()
+        hit = False
+        for k in kids:
+            if k.get('bgId') == old_short:
+                k['bgId'], k['wokeFrom'] = new_short, (k.get('wokeFrom') or []) + [old_short]
+                k.pop('sessionId', None)
+                hit = True
+        if hit:
+            save_children(kids)
+
+
+def cmd_wake(a):
+    """Prints one JSON line for a message about to go to a session that is not live (text on stdin):
+    {"action": "none"} (not a retired background session: send it as addressed), {"action": "woke", "job"} (it was
+    resumed with the message as its prompt), {"action": "live"} (another message just woke it and it is up: send it
+    as addressed), or {"action": "hold", "reason"} (left asleep: the message waits for it)."""
+    text = sys.stdin.read()
+    reg = registry()
+    me = find_self(reg, a.self) or {}
+    sender = me.get('name') or a.self or 'another session'
+    named = name_of_socket(a.to, reg) or (None if a.to.startswith('uds:') else a.to)
+    st = retired_named(named, reg) if named else None
+    if not st:
+        print(json.dumps({'action': 'none'}))
+        return 0
+    sid = st['sessionId']
+    reason = None
+    tokens = context_tokens(st.get('linkScanPath')) if isinstance(st.get('linkScanPath'), str) else None
+    if sid in parked_ids():
+        reason = 'it is parked in the panel'
+    elif tokens and tokens > TOKEN_LIMIT and not first_line(text).startswith((KEEP_GOING, NEW_JOB)):
+        reason = f'it is long ({kilo(tokens)} tokens)'
+    elif a.usage is not None and a.usage >= USAGE_LIMIT:
+        reason = f'the five-hour usage window is {a.usage:g}% used'
+    elif not os.path.isdir(st.get('cwd') or ''):
+        reason = f"its folder is gone ({st.get('cwd')})"
+    flagged = unrecorded_approval(text)
+    held_path = os.path.join(HELD, sid + '.ndjson')
+    outcome, said = None, None
+    if not reason:
+        held = read_lines(held_path)
+        body = (UNRECORDED + '\n\n' if flagged else '') + text
+        outcome, said = claim_wake(named, sid, sender, lambda: resume_bg(st, wake_prompt(st, sender, body, held)))
+        if outcome == 'woke':
+            if held:
+                os.replace(held_path, held_path + f'.woke-{int(time.time())}')
+            moved_child(sid[:8], said[:8])
+            append(LOG, {'at': time.time(), 'dir': 'woke', **stamp_of(me, a), 'to': named, 'toId': sid, 'job': said,
+                         'first': first_line(text)})
+            print(json.dumps({'action': 'woke', 'job': said}))
+            return 0
+        if outcome == 'settling':
+            deadline = time.time() + WAKE_LIVE_SECONDS
+            while time.time() < deadline:
+                if any(r.get('name') == named for r in registry().values()):
+                    print(json.dumps({'action': 'live'}))
+                    return 0
+                time.sleep(1)
+            reason = 'another message is waking it and it has not come up yet'
+        else:
+            reason = said
+    now = time.time()
+    append(held_path, {'at': now, 'from': sender, 'reason': f'asleep: {reason}', 'text': text,
+                       **({'unrecorded': True} if flagged else {})})
+    append(LOG, {'at': now, 'dir': 'in', 'from': sender, 'to': named, 'action': 'hold',
+                 'reason': f'asleep: {reason}', 'busy': False, 'away': away(), 'first': first_line(text)})
+    print(json.dumps({'action': 'hold', 'reason': f'{named} is asleep (Claude Code retired it after an hour at its '
+                      f'prompt) and was not woken: {reason}. The message waits for it and reaches it when it is next '
+                      'opened.'}))
+    return 0
 
 
 # ---------- the log and held notes ----------
@@ -1791,6 +2104,9 @@ def cmd_redirect(a):
         return 0
     hit = replaced_by(named)
     if not hit or hit[1].get('sessionId') == me.get('sessionId'):
+        # Not live but retired by Claude Code: the send hook asks `wake` once the message has passed its checks.
+        if not hit and not any(r.get('name') == named for r in reg.values()) and retired_named(named, reg):
+            keep['asleep'] = True
         print(json.dumps(keep))
         return 0
     role, now = hit
@@ -1818,7 +2134,9 @@ def cmd_who(a):
         return 1
     now = live_name(held.get('fromId'))
     if now is None:
-        print(f"{held.get('from')} (gone)")
+        asleep = retired_named(held.get('from'))
+        print(f"{held.get('from')} (" + ('asleep: Claude Code retired it after an hour at its prompt; a message wakes it)'
+                                         if asleep else 'gone)'))
     elif held.get('pending'):
         print(f"{now} (live, the successor; it has not yet run `role`)")
     else:
@@ -1852,6 +2170,13 @@ def cmd_debrief(a):
     if now:
         print(f"{now}  ({'; '.join(['your parent'] + tried)})")
         return 0
+    asleep = ([(held.get('from'), f"the last {route['role']} for {route['area']}")] if route and held else []) \
+        + [(kid.get('parent'), 'your parent')]
+    for name, who in asleep:
+        if name and retired_named(name):
+            print(f"{name}  ({who}; asleep: Claude Code retired it after an hour at its prompt, and your debrief "
+                  "wakes it)")
+            return 0
     tried.append(f"{kid.get('parent')}, your parent, is gone")
     print('hive.py: no one to send the debrief to: ' + '; '.join(tried) + ". Put it in the area's files and "
           'tell the user.', file=sys.stderr)
@@ -2285,6 +2610,8 @@ def main():
     p.add_argument('--undelivered', action='store_true', help='the send failed: log it, mark nothing')
     p = sub.add_parser('check'); p.add_argument('--to')
     p = sub.add_parser('redirect'); p.add_argument('--to', required=True)
+    p = sub.add_parser('wake'); p.add_argument('--to', required=True)
+    p.add_argument('--usage', type=float, help='the five-hour usage window, percent')
     p = sub.add_parser('reread'); p.add_argument('--transcript', help="a session's transcript (default: the one "
                    "this successor's predecessor left, from its spawn record)")
     sub.add_parser('done')
@@ -2319,7 +2646,7 @@ def main():
     a = ap.parse_args()
     return {'peers': cmd_peers, 'receive': cmd_receive, 'held': cmd_held, 'sent': cmd_sent, 'claim': cmd_claim,
             'spawn': cmd_spawn, 'pickup': cmd_pickup, 'resumed': cmd_resumed, 'log': cmd_log, 'decide': cmd_decide, 'role': cmd_role, 'who': cmd_who, 'debrief': cmd_debrief,
-            'check': cmd_check, 'redirect': cmd_redirect, 'reread': cmd_reread, 'done': cmd_done, 'work': cmd_work, 'close': cmd_close, 'note': cmd_note, 'since': cmd_since}[a.cmd](a)
+            'check': cmd_check, 'redirect': cmd_redirect, 'wake': cmd_wake, 'reread': cmd_reread, 'done': cmd_done, 'work': cmd_work, 'close': cmd_close, 'note': cmd_note, 'since': cmd_since}[a.cmd](a)
 
 
 if __name__ == '__main__':

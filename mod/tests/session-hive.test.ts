@@ -345,6 +345,53 @@ test('a debrief whose check failed still goes; one that was not delivered is log
   expect(w.calls[2]!.argv).toContain('--undelivered')
 })
 
+// A session Claude Code retired after an hour at its prompt: hive.py wakes it with the message, or keeps it.
+
+const asleepWorld = (on: any, wake: object, extra: (argv: readonly string[]) => object | undefined = () => undefined) =>
+  world(on, argv => ({ stdout: JSON.stringify(extra(argv) ?? (sub(argv) === 'redirect' ? { action: 'keep', asleep: true } : sub(argv) === 'wake' ? wake : {})) }))
+
+test('a debrief to a retired parent wakes it once its check passes; the engine never gets it', async ($, on) => {
+  const w = asleepWorld(on, { action: 'woke', job: 'abcd1234' }, argv => (sub(argv) === 'check' ? { action: 'allow' } : undefined))
+  const r = await $.session.send({ to: 'desk-34', text: DEBRIEF_TEXT, origin: { kind: 'model' } })
+  expect(r.isDelivered).toBe(true)
+  expect(w.sends).toBe(0)
+  expect(w.calls.map(c => sub(c.argv))).toEqual(['redirect', 'check', 'wake', 'sent'])
+  expect(w.calls[2]!.argv.join(' ')).toContain('wake --to desk-34 --usage 20')
+  expect(w.calls[2]!.stdin).toBe(DEBRIEF_TEXT)
+  expect(w.calls[3]!.argv).not.toContain('--undelivered')
+})
+
+test('a refused debrief does not wake a retired parent', async ($, on) => {
+  const w = asleepWorld(on, { action: 'woke' }, argv => (sub(argv) === 'check' ? { action: 'refuse', message: 'task open' } : undefined))
+  const r = await $.session.send({ to: 'desk-34', text: DEBRIEF_TEXT, origin: { kind: 'model' } })
+  expect(r.isDelivered).toBe(false)
+  expect(w.calls.map(c => sub(c.argv))).toEqual(['redirect', 'check'])
+})
+
+test('a message kept for a retired session counts as sent, as a held one does', async ($, on) => {
+  const w = asleepWorld(on, { action: 'hold', reason: 'desk-34 is asleep and was not woken: it is parked in the panel.' })
+  const r = await $.session.send({ to: 'desk-34', text: 'Question: merge 712?', origin: { kind: 'model' } })
+  expect(r.isDelivered).toBe(true)
+  expect(w.sends).toBe(0)
+  expect(w.calls.map(c => sub(c.argv))).toEqual(['redirect', 'wake', 'sent'])
+})
+
+test('when the retired session is up again, or wake fails, the message goes as addressed', async ($, on) => {
+  let wakeFails = false
+  const w = world(on, argv => (sub(argv) === 'wake' && wakeFails ? { exitCode: 1 } : { stdout: JSON.stringify(sub(argv) === 'redirect' ? { action: 'keep', asleep: true } : sub(argv) === 'wake' ? { action: 'live' } : {}) }))
+  await $.session.send({ to: 'desk-34', text: 'Question: merge 712?', origin: { kind: 'model' } })
+  wakeFails = true
+  await $.session.send({ to: 'desk-34', text: 'Question: merge 713?', origin: { kind: 'model' } })
+  expect(w.sends).toBe(2)
+  expect(w.calls.map(c => sub(c.argv))).toEqual(['redirect', 'wake', 'sent', 'redirect', 'wake', 'sent'])
+})
+
+test('a message to a live session never asks wake', async ($, on) => {
+  const w = world(on, argv => ({ stdout: sub(argv) === 'redirect' ? JSON.stringify({ action: 'keep' }) : '' }))
+  await $.session.send({ to: 'desk-4', text: 'Question: merge 712?', origin: { kind: 'model' } })
+  expect(w.calls.map(c => sub(c.argv))).toEqual(['redirect', 'sent'])
+})
+
 test('a question or progress note to the Desk is not checked', async ($, on) => {
   const w = world(on, () => ({ stdout: '' }))
   await $.session.send({ to: 'desk-4', text: 'Question: merge 712 before 713?', origin: { kind: 'model' } })

@@ -221,9 +221,11 @@ export const register: Register = on => {
     if (e.agentId || headless) return next(e)
     // A message to a session that handed its role on (a replaced Desk) goes to the role's live holder instead.
     // A failed lookup sends it as addressed.
+    let asleep = false
     try {
-      const v = JSON.parse(await hive($, ['redirect', '--to', e.to], e.text)) as { action: string; to?: string; text?: string }
+      const v = JSON.parse(await hive($, ['redirect', '--to', e.to], e.text)) as { action: string; to?: string; text?: string; asleep?: boolean }
       if (v.action === 'redirect' && v.to && v.text) e = { ...e, to: v.to, text: v.text }
+      asleep = v.action === 'keep' && v.asleep === true
     } catch (err) {
       $.ui.log(`session hive: redirect not checked (${err})`, { to: 'debug' })
     }
@@ -233,6 +235,23 @@ export const register: Register = on => {
         if (verdict.action === 'refuse' && verdict.message) return { isDelivered: false, reason: verdict.message }
       } catch (err) {
         $.ui.log(`session hive: debrief not checked (${err})`, { to: 'debug' })
+      }
+    }
+    // A session Claude Code retired after an hour at its prompt has no process to take the message: hive.py
+    // resumes it with the message as its prompt (once, within the wake limits), or keeps the message for it.
+    if (asleep) {
+      try {
+        const u = await measures($)
+        const usage = u.includes('--usage') ? ['--usage', u[u.indexOf('--usage') + 1]!] : []
+        const w = JSON.parse(await hive($, ['wake', '--to', e.to, ...usage], e.text)) as { action: string; job?: string; reason?: string }
+        // Kept for it, the message is queued as a held one is on the receiving side: the sender sees it delivered.
+        if (w.action === 'woke' || w.action === 'hold') {
+          if (w.action === 'hold') $.ui.log(`session hive: ${w.reason ?? 'asleep: the message waits for it'}`, { to: 'debug' })
+          await hive($, ['sent', '--to', e.to], e.text).catch(() => {})
+          return { isDelivered: true }
+        }
+      } catch (err) {
+        $.ui.log(`session hive: wake not tried (${err})`, { to: 'debug' })
       }
     }
     const r = await next(e)
