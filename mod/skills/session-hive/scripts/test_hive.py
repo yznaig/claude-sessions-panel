@@ -1612,6 +1612,8 @@ class Hive(unittest.TestCase):
         self.assertIn('close (the new work starts fresh in a new session, no state file); an errand', rules)
         self.assertIn('a `skills in use: …` line', rules)
         self.assertIn('a `## How we work` block', rules)
+        # e1122-58: a shortened rule drops its exceptions (desk-30 → desk-31 lost the woken-turn one)
+        self.assertIn('quoting each method rule the user set in this session word for word, exceptions included', rules)
         self.assertIn('`spawn --successor --state <file> --name <name>`', rules)
         self.assertIn("don't ask whether it is time", rules)
         self.assertIn('`close --name <name>`', rules)
@@ -1623,6 +1625,7 @@ class Hive(unittest.TestCase):
     def test_a_successor_is_refused_until_its_state_file_is_written(self):
         r = self.spawn('next', '--successor', 'no-state')
         self.assertIn('starts from a state file', r['reason'])
+        self.assertIn('word for word, exceptions included', r['reason'])    # e1122-58
         self.assertIn('no state file at', self.spawn('next', '--successor', '--state', '/nowhere/state.md')['reason'])
         bare = self.state('# State\nWhere things stand.\n', name='bare.md')
         self.assertIn('has no `## How we work` block', self.spawn('next', '--successor', '--state', bare)['reason'])

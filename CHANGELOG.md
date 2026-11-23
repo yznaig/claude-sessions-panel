@@ -1,5 +1,8 @@
 # Changelog
 
+## session-trail 0.20.1 (companion mod) — 2026-11-22
+**A hand-off note quotes the user's rules whole** (decision e1122-58, "#1 yes, go ahead"). A session handing off to a successor writes a state file whose `## How we work` block carries the method rules the user set. Desk-30's block shortened "the full list goes last" and dropped its exception for turns woken by another session, so desk-31 relisted after every debrief. Now the house rules, the `spawn --successor` refusal and the skill ask for each rule quoted word for word, exceptions included. Wording only; what `spawn` checks is unchanged. 182 script tests.
+
 ## 0.32.2 — 2026-11-22
 **A session working in a git worktree shows in its repo's window.** A window lists the sessions whose folder is inside its own. A sit-down that moved into a ticket worktree kept under `~/.claude/jobs/<id>/tmp/` (outside the repo) was left out of every window, though it was running and waiting on the user (spec-face-1122, 11-22). Now a session whose folder is in a git worktree (a `.git` file reading `gitdir: <repo>/.git/worktrees/<name>`, at or above its folder) counts as inside `<repo>`, so it shows, sounds and is kept like any other session of that window. A found repo is remembered; a miss is looked up again after a minute. 146 tests.
 
