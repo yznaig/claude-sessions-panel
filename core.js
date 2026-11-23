@@ -544,6 +544,7 @@ function writeSnapshot(rows, showAll) {
       state: r.attention || (r.closed ? 'closed' : r.status === 'offline' ? 'not running' : r.status),
       ...(r.folder ? { folder: r.folder } : {}),
       ...(r.parked ? { parked: true } : {}),
+      ...(r.retired ? { retired: r.retired } : {}),
       ...(r.note ? { note: r.note } : {}),
       ...(r.recap ? { asked: r.recap.asked, now: r.recap.now } : {}),
     })),

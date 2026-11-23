@@ -193,7 +193,7 @@
     // The name other sessions know it by (myapp-17), when it isn't just the title shown.
     const known = r.handle && r.handle !== r.name ? (offline || asleep ? 'Was ' : '') + r.handle + '\n' : '';
     d.title = known + r.cwd + '\n' + r.id + (offline ? '\nNot running: click to reopen' : '') +
-      (asleep ? (r.retired ? '\nAsleep: Claude Code stopped it after an hour waiting on you. Click to open it; the conversation resumes.' : '\nAsleep: its process was stopped to free memory. Click to wake it; the conversation resumes.') : '') +
+      (asleep ? (r.retired ? '\nAsleep: Claude Code stopped it after an hour ' + (r.retired === 'idle' ? 'idle' : 'waiting on you') + '. Click to open it; the conversation resumes. A message from another session wakes it.' : '\nAsleep: its process was stopped to free memory. Click to wake it; the conversation resumes.') : '') +
       (r.status === 'watching' ? '\nWatching' + (r.watchingFor ? ': ' + r.watchingFor : ' a background command') + '. It carries on by itself when that finishes.' : '');
     // The dot opens and closes the row's lines (ASKED, NOW, your note); it is the big dot while open.
     // Right-click it for its color. A click anywhere else on the row opens the session.

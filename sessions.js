@@ -99,8 +99,8 @@ class Saved {
   }
   entry(id) { return this.known.get(id); }
   // Stopped while this window kept running: ended on purpose, so not shown as "not running".
-  // Not when the panel put it to sleep, or Claude Code retired a background session still waiting on
-  // you: those keep their place.
+  // Not when the panel put it to sleep, or Claude Code retired a background session after an hour at its
+  // prompt (waiting on you, or idle): those keep their place.
   endedHere(id, cwd, liveIds) { return this.ranHere.has(id) && !liveIds.has(id) && this.scope.owns(cwd) && !this.isAsleep(id); }
 
   // Rebuild after a look at the registry. `live`: [{ entry, keep }] for each running session.
@@ -315,7 +315,7 @@ class Notes {
 class SessionList {
   constructor({ store, transcripts, procs, hive, autoColors, scope, now, removedClearMs, autoCloseMs, live, ended, parkedJob }, carried) {
     this.hive = hive || null;
-    // A background session Claude Code retired while it waited on you (jobs.js): kept, as asleep.
+    // A background session Claude Code retired after an hour at its prompt (jobs.js): kept, as asleep.
     this.parkedJob = parkedJob || (() => null);
     this.autoColors = autoColors || (() => undefined);
     this.store = store;
@@ -630,7 +630,7 @@ class SessionList {
 
   offlineRow(e, dismissed, { kept, parked, colors, notes }) {
     const a = this.asleep.get(e.id);
-    // Retired by Claude Code while it waited on you: asleep and still blue, its question shown.
+    // Retired by Claude Code after an hour at its prompt: asleep, blue with its question if it asked one.
     const job = a ? null : this.parkedJob(e.id);
     if (job) return this.parkedRow(e, dismissed, job, { kept, parked, colors, notes });
     let attention = a && a.ready && !dismissed ? 'ready' : null;
@@ -649,15 +649,21 @@ class SessionList {
     };
   }
 
+  // Retired by Claude Code after an hour at its prompt (jobs.js): one that asked you something stays blue
+  // with its question; one that was idle is plain asleep, or red when its hive mark says ready to close
+  // or paused.
   parkedRow(e, dismissed, job, { kept, parked, colors, notes }) {
     const name = this.transcripts.displayName({ sessionId: e.id, cwd: e.cwd, name: e.name });
+    const waiting = job.state !== 'done';
+    const mark = !waiting && !dismissed ? this.markOf({ sessionId: e.id }) : null;
+    const attention = dismissed ? null : waiting ? 'waiting' : this.marked(null, 'asleep', mark);
     return {
       id: e.id, pid: null, name, cwd: e.cwd, repo: path.basename(e.cwd) || '?', status: 'asleep',
-      attention: dismissed ? null : 'waiting', dismissed, handle: e.handle || '', waitingFor: job.needs,
+      attention, dismissed, handle: e.handle || '', waitingFor: waiting ? job.needs : '',
       since: e.since, startedAt: e.startedAt || e.since, closed: false, folder: this.folders.of(e.id),
-      keep: kept.has(e.id), stopping: false, canStop: false, parked: parked.has(e.id), retired: true,
+      keep: kept.has(e.id), stopping: false, canStop: false, parked: parked.has(e.id), retired: waiting ? 'waiting' : 'idle',
       ...this.dotColor(e.id, colors.get(e.id), [e.handle, name]),
-      cost: null, relayedTo: '', pausedFor: '', note: notes.get(e.id) || '',
+      cost: null, relayedTo: '', pausedFor: attention === 'paused' ? mark.what : '', note: notes.get(e.id) || '',
     };
   }
 

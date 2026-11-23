@@ -298,6 +298,19 @@ function bgJob(h, name, { state = 'blocked', needs = 'ship it today?', at = h.no
   fs.mkdirSync(dir, { recursive: true });
   const transcript = path.join(h.home, '.claude/projects', h.proj.replace(/[^a-zA-Z0-9]/g, '-'), id + '.jsonl');
   fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ state, needs, sessionId: id, updatedAt: new Date(at).toISOString(), linkScanPath: transcript }));
+  return transcript;
+}
+
+// `claude --bg --resume <id>` carries a session on under a new id: a new job whose transcript opens with
+// a derived-from record naming the session it forked.
+function resumedAs(h, name, from) {
+  const transcript = bgJob(h, name, { state: 'working' });
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, [
+    JSON.stringify({ type: 'custom-title', customTitle: from, sessionId: h.id(name) }),
+    JSON.stringify({ type: 'derived-from', v: 1, sessionId: h.id(name), sessions: [{ type: 'claude_code_session', id: h.id('desk'), via: 'launch', started: h.id(from) }, { type: 'claude_code_session', id: h.id(from), via: 'fork' }] }),
+    L.stamped('Carrying on.', h.now),
+  ].join('\n') + '\n');
 }
 
 withHarness('a background session Claude Code retires while it waits on you stays listed, asleep and blue', async h => {
@@ -323,12 +336,66 @@ withHarness('a retired background session that was carried on elsewhere leaves w
   eq(h.row('movedbg'), undefined);
 });
 
-withHarness('a background job that finished leaves when it ends', async h => {
-  const s = h.session('donebg', { bg: true, transcript: [L.stamped('All done.', h.now)] });
+withHarness('a background session Claude Code retires while idle stays listed, plain asleep', async h => {
+  const s = h.session('donebg', { bg: true, transcript: [L.stamped('Waiting on the landing lock; will retry.', h.now)] });
   h.start();
-  bgJob(h, 'donebg', { state: 'done' });
+  bgJob(h, 'donebg', { state: 'done', needs: '' });
   await s.end(); h.step(); h.step(31e3);
-  eq(h.row('donebg'), undefined);
+  const r = h.row('donebg');
+  eq(r.status, 'asleep'); eq(r.attention, null, 'not blue: it asked you nothing'); eq(r.waitingFor, '');
+  eq(r.retired, 'idle'); eq(h.badge, 0, 'not on the badge');
+  eq(h.snapshot().rows.find(x => x.id === s.id).state, 'asleep');
+  eq(h.snapshot().rows.find(x => x.id === s.id).retired, 'idle');
+  h.restart();
+  eq(h.row('donebg').status, 'asleep', 'still there after VS Code restarts');
+  await h.send({ type: 'focus', id: s.id });
+  eq(h.executed.at(-1)[0], 'claude-vscode.editor.open'); eq(h.executed.at(-1)[1], s.id, 'a click reopens it');
+});
+
+withHarness('a retired idle session that sent its final debrief shows ready to close, asleep', async h => {
+  const s = h.session('kidsession', { bg: true, transcript: [L.stamped('Debrief sent.', h.now)] });
+  h.start();
+  bgJob(h, 'kidsession', { state: 'done', needs: '' });
+  h.hiveMark('kidsession', 'done', { how: 'final debrief' });
+  await s.end(); h.step(); h.step(31e3);
+  eq(h.row('kidsession').status, 'asleep'); eq(h.row('kidsession').attention, 'closable');
+});
+
+withHarness('a background session stopped on purpose (claude stop, the hive\'s close) leaves when it ends', async h => {
+  const s = h.session('stoppedbg', { bg: true, transcript: [L.stamped('All done.', h.now)] });
+  h.start();
+  bgJob(h, 'stoppedbg', { state: 'stopped', needs: '' });
+  await s.end(); h.step(); h.step(31e3);
+  eq(h.row('stoppedbg'), undefined);
+});
+
+withHarness('a retired background session whose last turn you interrupted (Esc) leaves when it ends', async h => {
+  const s = h.session('escbg', { bg: true, transcript: [L.stamped('Working on it', h.now), L.user('[Request interrupted by user]')] });
+  h.start();
+  bgJob(h, 'escbg', { state: 'done', needs: '' });
+  await s.end(); h.step(); h.step(31e3);
+  eq(h.row('escbg'), undefined);
+});
+
+withHarness('a retired background session carried on as a new background job leaves; the new one is listed', async h => {
+  const s = h.session('olddesk', { bg: true, transcript: [L.stamped('Waiting on a lock.', h.now)] });
+  const q = h.session('parkq', { bg: true, transcript: [L.stamped('Ship today?', h.now)] });
+  h.start();
+  bgJob(h, 'olddesk', { state: 'done', needs: '' }); bgJob(h, 'parkq');
+  await s.end(); await q.end(); h.step(); h.step(31e3);
+  eq(h.row('olddesk').status, 'asleep'); eq(h.row('parkq').attention, 'waiting');
+  resumedAs(h, 'newdesk', 'olddesk'); resumedAs(h, 'newq', 'parkq');
+  const n = h.session('newdesk', { bg: true }); h.step(); h.step(31e3);
+  eq(h.row('olddesk'), undefined, 'the resumed copy carries it on'); eq(h.row('newdesk').status, 'idle');
+  eq(h.row('parkq'), undefined, 'a blue one resumed elsewhere goes too');
+  h.restart(); eq(h.row('olddesk'), undefined); eq(n.id, h.id('newdesk'));
+});
+
+withHarness('old idle background jobs the panel was not listing do not come back', async h => {
+  h.session('here');
+  bgJob(h, 'olddone', { state: 'done', needs: '', at: h.now - 30 * 24 * H });
+  h.start(); h.step(); h.restart();
+  eq(h.row('olddone'), undefined);
 });
 
 withHarness('old blocked background jobs the panel was not listing do not come back', async h => {
