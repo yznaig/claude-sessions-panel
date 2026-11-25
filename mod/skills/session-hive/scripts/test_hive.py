@@ -668,6 +668,74 @@ class Hive(unittest.TestCase):
         self.run_hive('role', '--workspace', '/work/repo', '--area', 'runner', '--role', 'builder', self_id='peer-0002')
         self.assertEqual(self.spawn('deeper', who='peer-0002')['action'], 'refused')
 
+    # --- HIRE's kit lead (e1125-07): a lead role on LEAD_ROLES lifts the limit as a desk role does ---
+
+    def kit_lead_role(self, workspace=None, area='runner', role='kit-lead'):
+        return ('--workspace', workspace or os.path.join(self.home, 'hire'), '--area', area, '--role', role)
+
+    def test_a_sub_session_holding_hires_kit_lead_role_starts_its_own_one_level_down(self):
+        self.make_peer_a_child()
+        self.run_hive('role', *self.kit_lead_role(), self_id='peer-0002')
+        told = self.run_hive('peers', self_id='peer-0002')
+        self.assertIn('you hold the kit-lead role for runner: you may start sub-sessions of your own, one level deep '
+                      '(they debrief whoever holds that role)', told)
+        self.assertIn('When your brief is done', told, 'the kit lead still owes the Desk what its brief asks')
+        self.assertIn('That successor owes work-aa no debrief, so send the debrief your brief asks for before you hand '
+                      'off', told)
+        self.assertEqual(self.run_hive('debrief', self_id='peer-0002').split()[0], 'work-aa', 'its parent, as before')
+        r = self.spawn('kit-builder-a', who='peer-0002')
+        self.assertEqual(r['action'], 'started')
+        kid = [k for k in self.children_file() if k['name'] == 'kit-builder-a'][0]
+        self.assertEqual((kid['parent'], kid['parentId']), ('work-bb', 'peer-0002'))
+        self.assertEqual(kid['route'], {'workspace': os.path.join(self.home, 'hire'), 'area': 'runner', 'role': 'kit-lead'})
+        header = self.spawns()[0]['argv'][4].split('## Brief')[0]
+        self.assertIn('to whoever holds the kit-lead role for runner when you finish', header)
+        self.assertIn('You cannot start sub-sessions of your own, except a successor', header, 'its crew is one level')
+        p = subprocess.Popen(['sleep', '60'])
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        self.register(p.pid, 'kid-0005', 'kit-builder-a', '/work/repo')
+        r = self.spawn('deeper', who='kid-0005')
+        self.assertEqual(r['action'], 'refused', "a kit builder can't start its own")
+        self.assertIn('cannot start their own unless they hold a desk role or the kit-lead role', r['reason'])
+
+    def test_a_kit_lead_role_anywhere_else_and_other_roles_do_not_lift_the_limit(self):
+        self.make_peer_a_child()
+        for role in (self.kit_lead_role(area='hire'), self.kit_lead_role(workspace='/work/repo'),
+                     self.kit_lead_role(role='triage'), self.kit_lead_role(role='builder')):
+            self.run_hive('role', *role, self_id='peer-0002')
+            r = self.spawn('deeper', who='peer-0002')
+            self.assertEqual(r['action'], 'refused', role)
+            self.assertNotIn('kit-lead role for', self.run_hive('peers', self_id='peer-0002'), role)
+
+    def test_a_kit_leads_successor_takes_the_role_and_starts_the_crew(self):
+        self.make_peer_a_child()
+        self.run_hive('role', *self.kit_lead_role(), self_id='peer-0002')
+        r = self.spawn('kit-lead-2', '--successor', who='peer-0002', brief='Carry on from the state file.')
+        self.assertEqual(r['action'], 'started')
+        header = self.spawns()[0]['argv'][4].split('## Brief')[0]
+        self.assertIn('the successor that work-bb started to take over its kit-lead role for runner', header)
+        self.assertIn(f"role --workspace {os.path.join(self.home, 'hire')} --area runner --role kit-lead", header)
+        self.assertIn('you owe it no debrief', header)
+        self.assertNotIn('cannot start sub-sessions', header)
+        kid = [k for k in self.children_file() if k['name'] == 'kit-lead-2'][0]
+        self.assertTrue(kid['successor'])
+        self.assertEqual(kid['route']['role'], 'kit-lead')
+        p = subprocess.Popen(['sleep', '60'])
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        self.register(p.pid, 'next-0006', 'kit-lead-2', '/work/repo')
+        self.assertIn('You are the successor **work-bb** started for its kit-lead role for runner',
+                      self.run_hive('peers', self_id='next-0006'))
+        self.assertEqual(self.spawn('too-soon', who='next-0006')['action'], 'refused', 'not before it takes the role')
+        took = self.run_hive('role', *self.kit_lead_role(), self_id='next-0006', full=True)
+        self.assertEqual(took.stderr, '', 'the planned handoff does not warn that the old kit lead is still live')
+        self.assertIn('you hold the kit-lead role for runner: you owe it no debrief',
+                      self.run_hive('peers', self_id='next-0006'))
+        self.assertEqual(self.spawn('triage', who='next-0006')['action'], 'started')
+        owes = self.run_hive('debrief', self_id='next-0006', ok=False, full=True)
+        self.assertEqual(owes.returncode, 1)
+        self.assertIn("kit-lead-2 is work-bb's successor, so it owes work-bb no debrief", owes.stderr)
+        self.assertEqual(self.spawn('late', who='peer-0002')['action'], 'refused', 'the lift went with the role')
+
     def test_a_desk_role_handed_on_takes_the_lift_with_it(self):
         self.make_peer_a_child()
         self.run_hive('role', *self.DESK_ROLE, self_id='peer-0002')
