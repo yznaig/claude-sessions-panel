@@ -21,7 +21,7 @@ The script is `scripts/hive.py` in this skill's folder; run it with `python3 -I`
 | One line of fact for other sessions, in place of an FYI message | `note "<fact>"` |
 | Messages that waited for this session instead of waking it | `held` (it leaves them in place; they reach the session with the user's next prompt) |
 | Start a sub-session for a side thread, after the user said yes | `spawn --kind errand\|sit-down --name <short-name>`, the brief on stdin; with no kind it is refused and prints the verb test |
-| Hand this session's work to a successor (the last exit at a boundary from 150k of context, or a Desk handing off) | `spawn --successor --state <file> --name <short-name>`, a short brief on stdin; refused without a fresh state file holding a `## How we work` block and a `skills in use: …` line |
+| Hand this session's work to a successor (the last exit at a boundary from 150k of context, or a Desk handing off) | `spawn --successor --state <file> --name <short-name>`, a short brief on stdin; refused without a fresh state file holding a `## How we work` block and a `skills in use: …` line; for the holder of HIRE's desk role, also refused while `python3 ~/hire/docs/pass-off/desk.py handoff-check <file>` fails or can't run (its reasons are printed) |
 | Close a sub-session that is ready to close (its final debrief went out, nothing open, idle) | `close --name <name>`; its parent, the holder of the role it debriefs, or its successor may |
 | A sub-session: who gets its debrief now (its parent's role holder, else its parent) | `debrief` |
 | A successor: the user's own typed turns and each subagent report's side findings from its predecessor's transcript (its first step; the path is in its brief) | `reread [--transcript FILE]` |

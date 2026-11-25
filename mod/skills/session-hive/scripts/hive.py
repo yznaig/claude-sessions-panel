@@ -14,7 +14,9 @@
                                   this one's work (a Desk's takes its role; a sub-session's owes the debrief its
                                   parent is waiting for), needs no kind, and is refused without --state, the file this
                                   session wrote first: where things stand, a "How we work" block of the method
-                                  rules the user set here and a "skills in use: ..." line (or "none"). Every other spawn names its kind or is refused with
+                                  rules the user set here and a "skills in use: ..." line (or "none"); the holder
+                                  of HIRE's desk role is also refused when `desk.py handoff-check FILE` fails or
+                                  can't run (HANDOFF_CHECKS). Every other spawn names its kind or is refused with
                                   the verb test: an errand does the job and debriefs, in the background (`claude
                                   --bg`); a sit-down does its prep and waits for the user, in the background
                                   (the user opens it from their panel), and debriefs when its end goal is done;
@@ -127,6 +129,10 @@ CHANGED_CAP = 15             # files changed on disk the screen reads
 WHOLE_CAP = 4000             # a decision's text, a note, the user's words: kept whole up to this, refused (never cut) past it
 MERGE_WORKSPACE = os.environ.get('HIVE_MERGE_WORKSPACE') or os.path.expanduser('~/hire')   # where the ship timer reads merge words
 MERGE_AREA = 'merging'       # ...and the area it reads them under
+HANDOFF_CHECKS = {           # (workspace, area, role): the check a holder's successor state file must pass (e1124-22)
+    (os.path.expanduser('~/hire'), 'hire', 'desk'): ('docs/pass-off/desk.py', 'handoff-check'),
+}
+HANDOFF_CHECK_SECONDS = 60   # it takes about a second; past this it counts as not run
 MERGE_WORD = re.compile(r'\s*(?:merge|hold|open|forge-window)\s*:|\s*hold\s+#\d', re.I)   # what ship.py reads under that area
 STANDING_PATH = os.path.join('docs', 'pass-off', 'sessions', 'standing.md')   # under the workspace: generated from --standing decisions
 ASSENT = frozenset('yes yeah yep yup ok okay sure go ahead do it done approved approve agreed agree fine good sounds '
@@ -1097,6 +1103,48 @@ def state_file(path):
     return path, None
 
 
+def handoff_refusal(held, state):
+    """(why a holder of a role in HANDOFF_CHECKS may not start its successor yet, or None; what a passing check
+    printed, or None). The role's own check runs on the state file; a failing check, or one that can't run, refuses
+    (never a silent pass), and a passing one's notes (what it could not check) are passed on."""
+    why, said = _handoff_check(held, state)
+    return (why, None) if why else (None, said)
+
+
+def _handoff_check(held, state):
+    import subprocess
+    norm = lambda p: os.path.realpath(os.path.expanduser(p or ''))
+    said = []
+    for r in held:
+        key = next((k for k in HANDOFF_CHECKS if norm(k[0]) == norm(r.get('workspace'))
+                    and k[1] == (r.get('area') or '').lower() and k[2] == (r.get('role') or '').lower()), None)
+        if not key:
+            continue
+        rel, *args = HANDOFF_CHECKS[key]
+        script, what = os.path.join(key[0], rel), f"the {key[2]} role for {key[1]}'s hand-off check"
+        cmd = f'python3 {script} {" ".join(args)} {state}'
+        if not os.path.isfile(script):
+            return (f'{what} could not run: no {script}. Not started; a successor of this role waits for `{cmd}` to '
+                    'pass'), None
+        try:
+            p = subprocess.run([sys.executable, script, *args, state], cwd=os.path.dirname(script), capture_output=True,
+                               stdin=subprocess.DEVNULL, text=True, errors='replace', timeout=HANDOFF_CHECK_SECONDS)
+        except subprocess.TimeoutExpired:
+            return f'{what} did not finish in {HANDOFF_CHECK_SECONDS} s. Not started; run `{cmd}` and fix what it says', None
+        except OSError as e:
+            return f'{what} could not run ({e}). Not started; a successor of this role waits for `{cmd}` to pass', None
+        out = (p.stdout.strip() + '\n' + p.stderr.strip()).strip()
+        if p.returncode == 0:
+            said += [out] if out else []
+            continue
+        if 'Traceback (most recent call last)' in p.stderr:
+            return (f'{what} crashed (exit {p.returncode}), so the hand-off is unchecked. Not started; fix the check '
+                    f'or the state file, then spawn again. It said:\n{out}'), None
+        return (f'{what} refused the state file (`{cmd}`, exit {p.returncode}). Fix what it names in {state}, then '
+                f'spawn again. It said:\n{out or "(nothing)"}'), None
+    return None, '\n'.join(said) or None
+
+
 def reread_rule(name, transcript, script):
     """What a successor is told about its predecessor's words: a state-file line is a pointer, not the thing."""
     cmd = f"python3 -I {script} reread" + (f" --transcript {transcript}" if transcript else '')
@@ -1140,8 +1188,11 @@ def start_child(me, name, brief, unattended=False, successor=False, kind=None, s
     kind = None if successor else kind
     if not successor and kind not in KINDS:
         return {'action': 'refused', 'reason': 'name the kind: --kind errand or --kind sit-down', 'test': list(VERB_TEST)}
+    checked = None   # what a passing hand-off check said
     if successor:
         state, why = state_file(state)
+        if not why:
+            why, checked = handoff_refusal(roles_of(me.get('sessionId')), state)
         if why:
             return {'action': 'refused', 'reason': why}
     import fcntl
@@ -1276,6 +1327,8 @@ def start_child(me, name, brief, unattended=False, successor=False, kind=None, s
         out['jobDir'] = os.path.join(HOME, '.claude', 'jobs', kid.get('bgId') or the_id)
     if state:
         out['state'] = state
+    if checked:
+        out['handoffCheck'] = checked   # what the passing check said: its notes and the successor's list
     if kind:
         out['kind'] = kind
     if message_as and message_as != name:

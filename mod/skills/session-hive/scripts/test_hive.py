@@ -1638,6 +1638,75 @@ class Hive(unittest.TestCase):
         self.assertIn('last written 120 minutes ago', self.spawn('next', '--successor', '--state', old)['reason'])
         self.assertEqual(self.spawns(), [], 'nothing started')
 
+    # --- HIRE's desk hand-off check (e1124-22, D375 Left (b)) ---
+
+    def hire_desk_check(self, body):
+        """A stand-in for ~/hire/docs/pass-off/desk.py under the test HOME: `body` runs with `state` read from the
+        file its handoff-check is given; each call's argv is recorded."""
+        self.hire = os.path.join(self.home, 'hire')
+        os.makedirs(os.path.join(self.hire, 'docs', 'pass-off'), exist_ok=True)
+        self.check_calls = os.path.join(self.home, 'handoff-calls.ndjson')
+        with open(os.path.join(self.hire, 'docs', 'pass-off', 'desk.py'), 'w') as f:
+            f.write('import json, sys\n'
+                    f'open({self.check_calls!r}, "a").write(json.dumps(sys.argv[1:]) + "\\n")\n'
+                    'state = open(sys.argv[2]).read()\n' + body)
+        return ('--workspace', self.hire, '--area', 'hire', '--role', 'desk')
+
+    def check_calls_made(self):
+        try:
+            with open(self.check_calls) as f:
+                return [json.loads(l) for l in f]
+        except OSError:
+            return []
+
+    REFUSING_CHECK = ('if "DROPPED" in state:\n'
+                      '    print("# Hand-off check: desk-1 -> desk-2\\n- open: aaron-send-mason.md\\nrefused")\n'
+                      '    sys.exit(1)\n'
+                      'print("passes")\n')
+
+    def test_a_hire_desks_successor_starts_only_when_its_hand_off_check_passes(self):
+        role = self.hire_desk_check(self.REFUSING_CHECK)
+        self.run_hive('role', *role)
+        bad = self.state('# State\nDROPPED an ask.\n\n## How we work\n- Plain.\n\nskills in use: none\n', name='bad.md')
+        r, p = self.spawn('desk-next', '--successor', '--state', bad, full=True)
+        self.assertEqual(r['action'], 'refused')
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("hand-off check refused the state file", r['reason'])
+        self.assertIn('- open: aaron-send-mason.md', r['reason'], 'its reasons, printed')
+        self.assertIn(f'docs/pass-off/desk.py handoff-check {bad}', r['reason'], 'the command to run again')
+        self.assertEqual(self.spawns(), [], 'nothing started')
+        good = self.state(name='good.md')
+        r = self.spawn('desk-next', '--successor', '--state', good)
+        self.assertEqual(r['action'], 'started')
+        self.assertEqual(r['handoffCheck'], 'passes', 'what a passing check said is passed on')
+        self.assertEqual(len(self.spawns()), 1)
+        self.assertEqual(self.check_calls_made(), [['handoff-check', bad], ['handoff-check', good]])
+
+    def test_a_hire_desks_hand_off_check_that_cannot_run_refuses_never_passes(self):
+        role = self.hire_desk_check('raise RuntimeError("log unreadable")\n')
+        self.run_hive('role', *role)
+        r = self.spawn('desk-next', '--successor')
+        self.assertEqual(r['action'], 'refused')
+        self.assertIn('crashed', r['reason'])
+        self.assertIn('RuntimeError: log unreadable', r['reason'])
+        os.remove(os.path.join(self.hire, 'docs', 'pass-off', 'desk.py'))
+        r = self.spawn('desk-next', '--successor')
+        self.assertEqual(r['action'], 'refused')
+        self.assertIn('could not run: no ' + os.path.join(self.hire, 'docs', 'pass-off', 'desk.py'), r['reason'])
+        self.assertEqual(self.spawns(), [], 'nothing started')
+
+    def test_other_successors_never_run_the_hire_desk_check(self):
+        role = self.hire_desk_check(self.REFUSING_CHECK)
+        bad = self.state('# State\nDROPPED an ask.\n\n## How we work\n- Plain.\n\nskills in use: none\n', name='bad.md')
+        # A top-level session with no role, the desk role in another workspace, another role in ~/hire.
+        self.assertEqual(self.spawn('aa-next', '--successor', '--state', bad)['action'], 'started')
+        self.run_hive('role', *self.DESK_ROLE)
+        self.assertEqual(self.spawn('desk-next', '--successor', '--state', bad)['action'], 'started')
+        self.run_hive('role', *role[:-1], 'builder', self_id='peer-0002')
+        self.assertEqual(self.spawn('bb-next', '--successor', '--state', bad, who='peer-0002')['action'], 'started')
+        self.assertEqual(self.check_calls_made(), [], 'the check never ran')
+        self.assertEqual(len(self.spawns()), 3)
+
     def test_a_top_level_session_hands_its_work_to_a_successor_that_reads_its_state_first(self):
         state = self.state()
         r = self.spawn('aa-next', '--successor', '--state', state, brief='Carry on from the state file.')
