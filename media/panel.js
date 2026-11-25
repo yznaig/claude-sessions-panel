@@ -40,15 +40,22 @@
     if (r.attention === 'ready') return r.status === 'watching' ? 'response ready · watching' : 'response ready';
     if (r.attention === 'relayed') return 'recap at ' + r.relayedTo + ' ↗';
     if (r.attention === 'closable') return 'ready to close';
-    if (r.attention === 'paused') return r.pausedFor ? 'paused · ' + clip(r.pausedFor, WATCH_LABEL_MAX) : 'paused';
+    if (r.attention === 'paused') return r.pausedFor ? 'paused · ' + r.pausedFor : 'paused';
     if (r.status === 'busy') return 'running';
-    if (r.status === 'watching') return r.watchingFor ? 'watching · ' + clip(r.watchingFor, WATCH_LABEL_MAX) : 'watching';
+    if (r.status === 'watching') return r.watchingFor ? 'watching · ' + r.watchingFor : 'watching';
     if (r.status === 'waiting') return 'needs you';
     return 'idle';
   }
-  // What a session watches runs across the star and time-chip columns too (a watching row has neither),
-  // and the row cuts it off where that room ends; the whole description is in the row's tooltip.
-  const WATCH_LABEL_MAX = 80;
+  // A status that says what it is about (paused · …, needs you: …, watching · …) runs across its own
+  // row's star and time-chip columns too (such a row has neither), widens no column, and is cut off
+  // where that room ends; the whole text is in its tooltip.
+  function spills(r) {
+    if (r.closed || r.stopping || r.status === 'offline') return false;
+    if (r.attention === 'waiting') return !!r.waitingFor;
+    if (r.status === 'asleep') return false;
+    if (r.attention === 'paused') return !!r.pausedFor;
+    return !r.attention && r.status === 'watching' && !!r.watchingFor;
+  }
   // A workspace pill shows 8 characters at most, so one long folder name doesn't narrow every name.
   const REPO_LABEL_MAX = 8;
   function clip(text, n) { return text.length > n ? text.slice(0, n - 1).trimEnd() + '…' : text; }
@@ -178,7 +185,9 @@
   function costChip(r) {
     if (!r.cost) return el('span');
     const c = r.cost;
-    const chip = el('span', 'chip', minutesText(c.minutes) + (c.decisions ? ' · ' + plural(c.decisions, 'decision') : ''));
+    // In a very narrow panel the word "decisions" steps aside and the count stays (CSS).
+    const chip = el('span', 'chip', minutesText(c.minutes) + (c.decisions ? ' · ' + c.decisions : ''));
+    if (c.decisions) chip.appendChild(el('span', 'dec', c.decisions === 1 ? ' decision' : ' decisions'));
     chip.style.background = heat(c.minutes);
     chip.title = `Your time, roughly: ${plural(c.words, 'word')} to read (${c.readMinutes.toFixed(1)} min)` +
       (c.decisions ? ` + ${plural(c.decisions, 'numbered item')} to decide (${c.decideMinutes.toFixed(1)} min)` : '');
@@ -216,8 +225,8 @@
     const repo = el('span', 'repo', clip(r.repo, REPO_LABEL_MAX));
     if (r.repo.length > REPO_LABEL_MAX) repo.title = r.repo + '\n' + d.title;
     d.appendChild(repo);
-    // A row that says what it watches gives that line the star and time-chip columns as well.
-    const watchLine = kind === 'watching' && !r.stopping && !!r.watchingFor;
+    // A row whose status says what it is about gives that line the star and time-chip columns as well.
+    const watchLine = spills(r);
     // The star: mark an idle session green to come back to it, or clear the mark. Not on running or
     // watching sessions (they turn green by themselves) or ones that need you (already blue).
     if (watchLine) { /* no star, no chip: the state below spans their columns */ }
@@ -235,6 +244,7 @@
     if (marks.length) st.title = marks.join('\n') + '\n(⋯ to change)';
     if (r.attention === 'relayed') st.title = `It sent its recap to ${r.relayedTo} this turn: answer it there. Click to open this session anyway.` + (st.title ? '\n' + st.title : '');
     if (r.attention === 'closable') st.title = 'Its final debrief went out with nothing it started still running, and it has done no new work since: safe to close. A new edit, commit or background task in it takes the mark off.' + (st.title ? '\n' + st.title : '');
+    if (watchLine && r.attention === 'waiting') st.title = 'Needs you: ' + r.waitingFor + (st.title ? '\n' + st.title : '');
     if (r.attention === 'paused') st.title = `Paused: it is waiting on ${r.pausedFor || 'something'}, and its next step comes back to it. Not done; keep it open.` + (st.title ? '\n' + st.title : '');
     d.appendChild(st);
     d.appendChild(el('span', 'age', age(state.now - r.since)));
